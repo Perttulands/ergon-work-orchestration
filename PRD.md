@@ -2,9 +2,11 @@
 
 ## What It Is
 
-The city's active mind. `work` holds what's happening now, what happened before, and what any citizen should know before starting a task. It orchestrates agent work not by dispatching like a factory, but by remembering — what context is relevant, who's done similar work, what went wrong last time.
+The city's active mind. `work` is how Polis orchestrates. It holds what's happening now, what happened before, and what any citizen should know before starting a task. It orchestrates agent work not by dispatching like a factory, but by remembering — what context is relevant, who's done similar work, what went wrong last time.
 
 Starting work is an act of memory.
+
+The traces `work` captures become raw material for learning-loop, which distills patterns and proposes changes. Those proposals go through governance (Senate, Hierophant, Athena, Perttu) before becoming action. The loop closes through citizens, not automation.
 
 ## CLI
 
