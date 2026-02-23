@@ -5,6 +5,7 @@ package ecosystem
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -195,6 +196,51 @@ func BdClose(id, reason, repo string) error {
 	return nil
 }
 
+// --- Relay + agent state integration ---
+
+// BdAgentState sets the state of a bd agent bead.
+// Returns nil if bd is not available.
+func BdAgentState(agent, state string) error {
+	if !Available("bd") {
+		return nil
+	}
+	cmd := exec.Command("bd", "agent", "state", agent, state)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("bd agent state %s %s: %s: %w", agent, state, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// RelayHeartbeat updates the heartbeat for an agent.
+// Returns nil if relay is not available.
+func RelayHeartbeat(agent string) error {
+	if !Available("relay") {
+		return nil
+	}
+	cmd := exec.Command("relay", "heartbeat", "--agent", agent)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("relay heartbeat %s: %s: %w", agent, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// RelaySend sends a message from one agent to another, optionally threaded.
+// Returns nil if relay is not available.
+func RelaySend(from, to, message, thread string) error {
+	if !Available("relay") {
+		return nil
+	}
+	args := []string{"send", to, message, "--agent", from}
+	if thread != "" {
+		args = append(args, "--thread", thread)
+	}
+	cmd := exec.Command("relay", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("relay send %s->%s: %s: %w", from, to, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // GateCheck runs gate check and returns the verdict.
 // Returns nil with no error if gate is not available.
 func GateCheck(repo, citizen string) (*GateResult, error) {
@@ -289,7 +335,9 @@ func SelectTemplate(task string) (*TemplateSelection, error) {
 
 	script := filepath.Join(dir, "scripts", "select-template.sh")
 	if _, err := os.Stat(script); err != nil {
-		return nil, nil // script doesn't exist, degrade gracefully
+		// Graceful degradation: learning-loop dir exists but script is missing
+		log.Printf("warning: select-template.sh not found: %v", err)
+		return nil, nil
 	}
 
 	cmd := exec.Command("bash", script, task)
@@ -315,6 +363,8 @@ func CollectFeedback(record RunRecord, workDir string) error {
 
 	script := filepath.Join(dir, "scripts", "feedback-collector.sh")
 	if _, err := os.Stat(script); err != nil {
+		// Graceful degradation: learning-loop dir exists but script is missing
+		log.Printf("warning: feedback-collector.sh not found: %v", err)
 		return nil
 	}
 

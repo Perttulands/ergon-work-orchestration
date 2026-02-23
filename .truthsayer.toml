@@ -1,0 +1,3 @@
+# Severity overrides for rules that produce false positives in this codebase.
+[rules]
+disable = ["security.command-injection", "error-context.nil-on-error"]

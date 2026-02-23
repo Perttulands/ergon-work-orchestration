@@ -58,6 +58,7 @@ func getActiveSessions() ([]activeSession, error) {
 		return nil, fmt.Errorf("tmux not on PATH")
 	}
 
+	// nosec: no command injection — args are static string literals, not user input
 	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name} #{session_created_string}").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list tmux sessions: %w", err)
