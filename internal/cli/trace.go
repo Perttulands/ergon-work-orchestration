@@ -41,7 +41,10 @@ func newTraceCmd() *cobra.Command {
 			}
 
 			if jsonOut {
-				data, _ := json.MarshalIndent(events, "", "  ")
+				data, err := json.MarshalIndent(events, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshal json: %w", err)
+				}
 				cmd.Println(string(data))
 				return nil
 			}

@@ -39,7 +39,10 @@ func newHistoryCmd() *cobra.Command {
 			}
 
 			if jsonOut {
-				data, _ := json.MarshalIndent(runs, "", "  ")
+				data, err := json.MarshalIndent(runs, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshal json: %w", err)
+				}
 				cmd.Println(string(data))
 				return nil
 			}

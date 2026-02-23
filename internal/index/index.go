@@ -138,8 +138,15 @@ func scanRuns(rows *sql.Rows) ([]RunRecord, error) {
 		if err := rows.Scan(&r.TraceID, &r.Agent, &r.Task, &r.BeadID, &startStr, &endStr, &r.Outcome, &r.DurationS, &r.TracePath); err != nil {
 			return nil, fmt.Errorf("scan run: %w", err)
 		}
-		r.StartTime, _ = time.Parse(time.RFC3339, startStr)
-		r.EndTime, _ = time.Parse(time.RFC3339, endStr)
+		var parseErr error
+		r.StartTime, parseErr = time.Parse(time.RFC3339, startStr)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse start time %q: %w", startStr, parseErr)
+		}
+		r.EndTime, parseErr = time.Parse(time.RFC3339, endStr)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse end time %q: %w", endStr, parseErr)
+		}
 		runs = append(runs, r)
 	}
 	return runs, rows.Err()

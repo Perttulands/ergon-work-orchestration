@@ -28,7 +28,10 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			if jsonOut {
-				data, _ := json.MarshalIndent(sessions, "", "  ")
+				data, err := json.MarshalIndent(sessions, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshal json: %w", err)
+				}
 				cmd.Println(string(data))
 				return nil
 			}
@@ -57,7 +60,7 @@ func getActiveSessions() ([]activeSession, error) {
 
 	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name} #{session_created_string}").Output()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list tmux sessions: %w", err)
 	}
 
 	var sessions []activeSession
