@@ -10,7 +10,8 @@ import (
 // Graceful degradation: Gather works even when nothing is available.
 func TestGatherDegradesFully(t *testing.T) {
 	cfg := Config{
-		WorkDir: t.TempDir(),
+		WorkDir:   t.TempDir(),
+		BeadsRoot: t.TempDir(), // isolate from real bv data
 	}
 	result, err := Gather(cfg)
 	if err != nil {
@@ -37,11 +38,15 @@ func TestGatherWithCitizenButNoBdOrLoop(t *testing.T) {
 	os.MkdirAll(citizenDir, 0o755)
 	os.WriteFile(filepath.Join(citizenDir, "degraded-citizen.md"), []byte("Prefer short PRs."), 0o644)
 
+	// Isolate from real learning-loop scripts
+	t.Setenv("LEARNING_LOOP_DIR", t.TempDir())
+
 	cfg := Config{
-		Citizen: "degraded-citizen",
-		Task:    "some task",
-		Repo:    "/tmp",
-		WorkDir: workDir,
+		Citizen:   "degraded-citizen",
+		Task:      "some task",
+		Repo:      "/tmp",
+		WorkDir:   workDir,
+		BeadsRoot: t.TempDir(), // isolate from real bv data
 	}
 	result, err := Gather(cfg)
 	if err != nil {
@@ -55,15 +60,16 @@ func TestGatherWithCitizenButNoBdOrLoop(t *testing.T) {
 		t.Error("markdown should contain citizen section")
 	}
 	if result.LearningPatterns != "" {
-		t.Error("should have no learning patterns without loop")
+		t.Error("should have no learning patterns when learning-loop unavailable")
 	}
 }
 
 // Graceful degradation: Gather with missing citizen file continues.
 func TestGatherMissingCitizenFileOK(t *testing.T) {
 	cfg := Config{
-		Citizen: "nonexistent-citizen",
-		WorkDir: t.TempDir(),
+		Citizen:   "nonexistent-citizen",
+		WorkDir:   t.TempDir(),
+		BeadsRoot: t.TempDir(), // isolate from real bv data
 	}
 	result, err := Gather(cfg)
 	if err != nil {

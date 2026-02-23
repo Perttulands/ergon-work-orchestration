@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"polis/work/internal/ecosystem"
 )
 
 func TestReadCitizenExperience(t *testing.T) {
@@ -82,8 +84,9 @@ func TestGatherWithCitizenOnly(t *testing.T) {
 	}
 
 	cfg := Config{
-		Citizen: "apollo",
-		WorkDir: workDir,
+		Citizen:   "apollo",
+		WorkDir:   workDir,
+		BeadsRoot: t.TempDir(), // isolate from real bv data
 	}
 	result, err := Gather(cfg)
 	if err != nil {
@@ -100,7 +103,8 @@ func TestGatherWithCitizenOnly(t *testing.T) {
 
 func TestGatherNoContext(t *testing.T) {
 	cfg := Config{
-		WorkDir: t.TempDir(),
+		WorkDir:   t.TempDir(),
+		BeadsRoot: t.TempDir(), // isolate from real bv data
 	}
 	result, err := Gather(cfg)
 	if err != nil {
@@ -108,5 +112,240 @@ func TestGatherNoContext(t *testing.T) {
 	}
 	if result.Markdown != "No prior context available. This is a fresh start." {
 		t.Errorf("unexpected markdown: %q", result.Markdown)
+	}
+}
+
+// --- bv integration tests ---
+
+func TestFormatBvSearch(t *testing.T) {
+	resp := &ecosystem.BvSearchResponse{
+		Results: []ecosystem.BvSearchResult{
+			{IssueID: "proj-abc", Score: 0.85, Title: "Add JWT auth"},
+			{IssueID: "proj-def", Score: 0.42, Title: "Fix login bug"},
+		},
+	}
+	result := formatBvSearch(resp)
+	if !strings.Contains(result, "## Similar Beads") {
+		t.Error("missing header")
+	}
+	if !strings.Contains(result, "proj-abc") {
+		t.Error("missing first result")
+	}
+	if !strings.Contains(result, "85%") {
+		t.Error("missing score percentage")
+	}
+	if !strings.Contains(result, "Fix login bug") {
+		t.Error("missing second result title")
+	}
+}
+
+func TestFormatBvRelated(t *testing.T) {
+	resp := &ecosystem.BvRelatedResponse{
+		TargetBeadID: "proj-xyz",
+		TargetTitle:  "Wire bv into work",
+		Concurrent: []ecosystem.BvRelatedItem{
+			{BeadID: "proj-aaa", Title: "Auto close reasons", Status: "open", Reason: "Active in same window"},
+		},
+		TotalRelated: 1,
+	}
+	result := formatBvRelated(resp)
+	if !strings.Contains(result, "## Related Work") {
+		t.Error("missing header")
+	}
+	if !strings.Contains(result, "proj-xyz") {
+		t.Error("missing target bead ID")
+	}
+	if !strings.Contains(result, "proj-aaa") {
+		t.Error("missing related bead")
+	}
+	if !strings.Contains(result, "Active in same window") {
+		t.Error("missing reason")
+	}
+}
+
+func TestFormatBvPlan(t *testing.T) {
+	resp := &ecosystem.BvPlanResponse{}
+	resp.Plan.Tracks = []ecosystem.BvPlanTrack{
+		{
+			TrackID: "track-A",
+			Items: []ecosystem.BvPlanItem{
+				{ID: "proj-111", Title: "First task", Priority: 0, Status: "open"},
+				{ID: "proj-222", Title: "Done task", Priority: 1, Status: "closed"},
+			},
+		},
+	}
+	resp.Plan.TotalActionable = 2
+	resp.Plan.TotalBlocked = 0
+	resp.Plan.Summary = ecosystem.BvPlanSummary{
+		HighestImpact: "proj-111",
+		ImpactReason:  "Unblocks 3 others",
+	}
+
+	result := formatBvPlan(resp)
+	if !strings.Contains(result, "## Execution Plan") {
+		t.Error("missing header")
+	}
+	if !strings.Contains(result, "Actionable: 2") {
+		t.Error("missing actionable count")
+	}
+	if !strings.Contains(result, "[ ] **proj-111**") {
+		t.Error("missing open task checkbox")
+	}
+	if !strings.Contains(result, "[x] **proj-222**") {
+		t.Error("missing closed task checkbox")
+	}
+	if !strings.Contains(result, "Highest impact: **proj-111**") {
+		t.Error("missing highest impact summary")
+	}
+}
+
+func TestFormatPRD(t *testing.T) {
+	result := formatPRD("# My Project\n\nA cool tool.")
+	if !strings.Contains(result, "## Project Context (PRD.md)") {
+		t.Error("missing header")
+	}
+	if !strings.Contains(result, "# My Project") {
+		t.Error("missing PRD content")
+	}
+}
+
+func TestFormatPRDTruncation(t *testing.T) {
+	long := strings.Repeat("x", 3000)
+	result := formatPRD(long)
+	if !strings.Contains(result, "[...truncated]") {
+		t.Error("long PRD should be truncated")
+	}
+	// Should not contain the full 3000 chars
+	if len(result) > 2200 {
+		t.Errorf("truncated PRD too long: %d chars", len(result))
+	}
+}
+
+func TestReadPRD(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "PRD.md"), []byte("# Test PRD\n\nDo things."), 0o644)
+
+	got, err := readPRD(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "# Test PRD\n\nDo things." {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestReadPRDMissing(t *testing.T) {
+	_, err := readPRD(t.TempDir())
+	if err == nil {
+		t.Error("expected error for missing PRD.md")
+	}
+}
+
+// Test that Gather with real bv produces bv sections when BeadsRoot has data.
+func TestGatherWithBv(t *testing.T) {
+	if !ecosystem.Available("bv") {
+		t.Skip("bv not available")
+	}
+
+	cfg := Config{
+		Task:      "wire bv integration",
+		BeadID:    "projects-i01",
+		WorkDir:   t.TempDir(),
+		BeadsRoot: "/home/polis/projects",
+	}
+	result, err := Gather(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.BvSearch == nil {
+		t.Error("expected bv search results")
+	}
+	if result.BvRelated == nil {
+		t.Error("expected bv related results")
+	}
+	if result.BvPlan == nil {
+		t.Error("expected bv plan results")
+	}
+	if !strings.Contains(result.Markdown, "Similar Beads") {
+		t.Error("markdown should contain bv search section")
+	}
+	if !strings.Contains(result.Markdown, "Related Work") {
+		t.Error("markdown should contain bv related section")
+	}
+	if !strings.Contains(result.Markdown, "Execution Plan") {
+		t.Error("markdown should contain bv plan section")
+	}
+}
+
+func TestFormatTemplateSelection(t *testing.T) {
+	variant := "focused"
+	sel := &ecosystem.TemplateSelection{
+		Template:   "code-fix",
+		Variant:    &variant,
+		Agent:      "mercury",
+		TaskType:   "bugfix",
+		Score:      0.92,
+		Confidence: "high",
+		Reasoning:  "Past fixes with this template scored well.",
+		Warnings:   []string{"Flaky test suite detected"},
+	}
+	result := formatTemplateSelection(sel)
+	if !strings.Contains(result, "## Recommended Approach") {
+		t.Error("missing header")
+	}
+	if !strings.Contains(result, "code-fix") {
+		t.Error("missing template name")
+	}
+	if !strings.Contains(result, "focused") {
+		t.Error("missing variant")
+	}
+	if !strings.Contains(result, "0.92") {
+		t.Error("missing score")
+	}
+	if !strings.Contains(result, "Flaky test suite") {
+		t.Error("missing warning")
+	}
+}
+
+func TestGatherWithLearningLoop(t *testing.T) {
+	if ecosystem.LearningLoopDir() == "" {
+		t.Skip("learning-loop scripts not available")
+	}
+
+	cfg := Config{
+		Task:      "fix a broken test",
+		WorkDir:   t.TempDir(),
+		BeadsRoot: t.TempDir(),
+	}
+	result, err := Gather(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TemplateSelection == nil {
+		t.Fatal("expected template selection")
+	}
+	if result.TemplateSelection.TaskType == "" {
+		t.Error("task_type should not be empty")
+	}
+	if !strings.Contains(result.Markdown, "Recommended Approach") {
+		t.Error("markdown should contain learning-loop recommendation")
+	}
+}
+
+func TestGatherWithoutLearningLoop(t *testing.T) {
+	t.Setenv("LEARNING_LOOP_DIR", t.TempDir())
+
+	cfg := Config{
+		Task:      "some task",
+		WorkDir:   t.TempDir(),
+		BeadsRoot: t.TempDir(),
+	}
+	result, err := Gather(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TemplateSelection != nil {
+		t.Error("should have no template selection when learning-loop unavailable")
 	}
 }

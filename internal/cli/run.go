@@ -131,11 +131,13 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	}
 
 	// Step 6: Gate check
+	var gateResult *ecosystem.GateResult
 	if spawnErr == nil {
 		gate, gateErr := ecosystem.GateCheck(repo, citizen)
 		if gateErr != nil {
 			cmd.Printf("  Warning: gate check failed: %v\n", gateErr)
 		} else if gate != nil {
+			gateResult = gate
 			if tr != nil {
 				pass := gate.Pass
 				score := gate.Score
@@ -157,8 +159,10 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	}
 
 	// Step 7: Close trace and record to index
+	var durationS int64
 	if tr != nil {
 		meta := tr.GetMetadata(outcome)
+		durationS = meta.DurationS
 		tr.Close(outcome, spawnErr)
 
 		// Index the run for fast queries
@@ -173,12 +177,18 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		}
 	}
 
-	// Step 8: Record citizen experience
+	// Step 8: Learning-loop feedback collection
+	feedbackRecord := buildRunRecord(beadID, citizen, outcome, durationS, gateResult, ctx)
+	if fbErr := ecosystem.CollectFeedback(feedbackRecord, workDir); fbErr != nil {
+		cmd.Printf("  Warning: feedback collection failed: %v\n", fbErr)
+	}
+
+	// Step 9: Record citizen experience
 	if expErr := workctx.AppendCitizenExperience(workDir, citizen, task, outcome, beadID); expErr != nil {
 		cmd.Printf("  Warning: failed to record experience: %v\n", expErr)
 	}
 
-	// Step 9: Close bead
+	// Step 10: Close bead
 	if bead != nil {
 		reason := fmt.Sprintf("%s: %s", outcome, task)
 		if closeErr := ecosystem.BdClose(beadID, reason, repo); closeErr != nil {
@@ -220,4 +230,58 @@ func randomID() string {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+// buildRunRecord maps work run outcome data to the format expected by feedback-collector.sh.
+func buildRunRecord(beadID, citizen, outcome string, durationS int64, gate *ecosystem.GateResult, ctx *workctx.Result) ecosystem.RunRecord {
+	rec := ecosystem.RunRecord{
+		Bead:            beadID,
+		Agent:           citizen,
+		Model:           "claude-sonnet",
+		TemplateName:    "custom",
+		Attempt:         1,
+		DurationSeconds: durationS,
+		Verification: ecosystem.Verification{
+			Tests:      "skipped",
+			Lint:       "skipped",
+			UBS:        "skipped",
+			Truthsayer: "skipped",
+		},
+	}
+
+	// Map template name from context engine's learning-loop selection
+	if ctx != nil && ctx.TemplateSelection != nil {
+		rec.TemplateName = ctx.TemplateSelection.TaskType
+	}
+
+	// Map outcome to status/exit_code
+	switch outcome {
+	case "success":
+		rec.Status = "done"
+		rec.ExitCode = 0
+	case "error":
+		rec.Status = "failed"
+		rec.ExitCode = 1
+	case "timeout":
+		rec.Status = "timeout"
+		rec.ExitCode = 0
+	case "gate_fail":
+		rec.Status = "done"
+		rec.ExitCode = 0
+	default:
+		rec.Status = "done"
+		rec.ExitCode = 0
+	}
+
+	// Map gate result to verification signals
+	if gate != nil {
+		if gate.Pass {
+			rec.Verification.Tests = "pass"
+			rec.Verification.Lint = "pass"
+		} else {
+			rec.Verification.Tests = "fail"
+		}
+	}
+
+	return rec
 }
