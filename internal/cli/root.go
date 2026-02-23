@@ -18,6 +18,7 @@ func NewRoot(version string) *cobra.Command {
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newHistoryCmd())
 	root.AddCommand(newTraceCmd())
+	root.AddCommand(newFeedCmd())
 
 	return root
 }
