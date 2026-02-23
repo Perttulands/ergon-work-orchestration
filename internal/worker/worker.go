@@ -162,7 +162,7 @@ func waitForReady(session string, timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		output, err := capturePane(session)
 		if err != nil {
-			return err
+			return fmt.Errorf("wait for ready: %w", err)
 		}
 		// Claude Code shows a prompt character when ready
 		if strings.Contains(output, "❯") || strings.Contains(output, ">") {
