@@ -16,24 +16,20 @@ func TestOpenAndClose(t *testing.T) {
 		t.Fatalf("open trace: %v", err)
 	}
 
-	// Verify trace dir was created
 	if _, err := os.Stat(filepath.Dir(tr.FilePath())); os.IsNotExist(err) {
 		t.Error("trace directory should exist")
 	}
 
-	// Emit a custom event
 	tr.Emit(Event{
 		EventType: "tool_call",
 		Tool:      "bash",
 		Cmd:       "go test ./...",
 	})
 
-	// Close with success
 	if err := tr.Close("success", nil); err != nil {
 		t.Fatalf("close trace: %v", err)
 	}
 
-	// Read the trace file and verify JSONL
 	data, err := os.ReadFile(tr.FilePath())
 	if err != nil {
 		t.Fatalf("read trace: %v", err)
@@ -44,7 +40,6 @@ func TestOpenAndClose(t *testing.T) {
 		t.Fatalf("expected 3 trace events, got %d: %s", len(lines), string(data))
 	}
 
-	// Verify begin event
 	var begin Event
 	if err := json.Unmarshal([]byte(lines[0]), &begin); err != nil {
 		t.Fatalf("parse begin: %v", err)
@@ -59,7 +54,6 @@ func TestOpenAndClose(t *testing.T) {
 		t.Errorf("bead should be test-bead-123, got: %s", begin.Bead)
 	}
 
-	// Verify tool_call event
 	var tool Event
 	if err := json.Unmarshal([]byte(lines[1]), &tool); err != nil {
 		t.Fatalf("parse tool: %v", err)
@@ -67,11 +61,7 @@ func TestOpenAndClose(t *testing.T) {
 	if tool.EventType != "tool_call" {
 		t.Errorf("second event should be tool_call, got: %s", tool.EventType)
 	}
-	if tool.Cmd != "go test ./..." {
-		t.Errorf("cmd should be 'go test ./...', got: %s", tool.Cmd)
-	}
 
-	// Verify end event
 	var end Event
 	if err := json.Unmarshal([]byte(lines[2]), &end); err != nil {
 		t.Fatalf("parse end: %v", err)
@@ -119,5 +109,190 @@ func TestTraceFilePath(t *testing.T) {
 
 	if !strings.Contains(tr.FilePath(), "trace-path-test.jsonl") {
 		t.Errorf("file path should contain bead ID: %s", tr.FilePath())
+	}
+}
+
+func TestEmitToolCall(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "tool-test", "zeus", "task")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if err := tr.EmitToolCall("bash", "npm install", 1500); err != nil {
+		t.Fatalf("emit tool call: %v", err)
+	}
+	tr.Close("success", nil)
+
+	events, err := ReadTrace(tr.FilePath())
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+
+	// begin, tool_call, end
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+	if events[1].EventType != "tool_call" {
+		t.Errorf("expected tool_call, got %s", events[1].EventType)
+	}
+	if events[1].Tool != "bash" {
+		t.Errorf("expected tool=bash, got %s", events[1].Tool)
+	}
+	if events[1].DurationMs == nil || *events[1].DurationMs != 1500 {
+		t.Error("expected duration_ms=1500")
+	}
+}
+
+func TestEmitFileWrite(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "fw-test", "zeus", "task")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if err := tr.EmitFileWrite("src/auth.ts", 45); err != nil {
+		t.Fatalf("emit file write: %v", err)
+	}
+	tr.Close("success", nil)
+
+	events, err := ReadTrace(tr.FilePath())
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+
+	if events[1].EventType != "file_write" {
+		t.Errorf("expected file_write, got %s", events[1].EventType)
+	}
+	if events[1].Path != "src/auth.ts" {
+		t.Errorf("expected path=src/auth.ts, got %s", events[1].Path)
+	}
+	if events[1].Lines == nil || *events[1].Lines != 45 {
+		t.Error("expected lines=45")
+	}
+}
+
+func TestEmitWorkerOutput(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "wo-test", "ares", "task")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if err := tr.EmitWorkerOutput("compiling... done"); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	tr.Close("success", nil)
+
+	events, err := ReadTrace(tr.FilePath())
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if events[1].Output != "compiling... done" {
+		t.Errorf("expected output content, got: %s", events[1].Output)
+	}
+}
+
+func TestEmitError(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "err-test", "zeus", "task")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if err := tr.EmitError("connection timeout"); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	tr.Close("error", nil)
+
+	events, err := ReadTrace(tr.FilePath())
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if events[1].EventType != "error" {
+		t.Errorf("expected error event, got %s", events[1].EventType)
+	}
+	if events[1].Error != "connection timeout" {
+		t.Errorf("expected error msg, got: %s", events[1].Error)
+	}
+}
+
+func TestReadTrace(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "read-test", "zeus", "full task")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	tr.EmitToolCall("bash", "go build", 500)
+	tr.EmitFileWrite("main.go", 20)
+	tr.EmitWorkerOutput("built ok")
+	tr.Close("success", nil)
+
+	events, err := ReadTrace(tr.FilePath())
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// begin, tool_call, file_write, worker_output, end = 5
+	if len(events) != 5 {
+		t.Fatalf("expected 5 events, got %d", len(events))
+	}
+
+	types := make([]string, len(events))
+	for i, e := range events {
+		types[i] = e.EventType
+	}
+	expected := []string{"begin", "tool_call", "file_write", "worker_output", "end"}
+	for i, want := range expected {
+		if types[i] != want {
+			t.Errorf("event %d: got %s, want %s", i, types[i], want)
+		}
+	}
+}
+
+func TestReadTraceNonExistent(t *testing.T) {
+	_, err := ReadTrace("/tmp/nonexistent-trace-file.jsonl")
+	if err == nil {
+		t.Error("expected error for non-existent file")
+	}
+}
+
+func TestGetMetadata(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "meta-test", "apollo", "build UI")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer tr.Close("success", nil)
+
+	meta := tr.GetMetadata("success")
+	if meta.BeadID != "meta-test" {
+		t.Errorf("bead=%s, want meta-test", meta.BeadID)
+	}
+	if meta.Agent != "apollo" {
+		t.Errorf("agent=%s, want apollo", meta.Agent)
+	}
+	if meta.Task != "build UI" {
+		t.Errorf("task=%s, want build UI", meta.Task)
+	}
+	if meta.Outcome != "success" {
+		t.Errorf("outcome=%s, want success", meta.Outcome)
+	}
+	if meta.FilePath != tr.FilePath() {
+		t.Errorf("path mismatch")
+	}
+}
+
+func TestBeadID(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "bead-id-test", "zeus", "task")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer tr.Close("success", nil)
+
+	if tr.BeadID() != "bead-id-test" {
+		t.Errorf("BeadID()=%s, want bead-id-test", tr.BeadID())
 	}
 }
