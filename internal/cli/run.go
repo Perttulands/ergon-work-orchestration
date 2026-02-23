@@ -9,6 +9,7 @@ import (
 
 	workctx "polis/work/internal/context"
 	"polis/work/internal/ecosystem"
+	"polis/work/internal/index"
 	"polis/work/internal/trace"
 	"polis/work/internal/worker"
 
@@ -155,9 +156,21 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		}
 	}
 
-	// Step 7: Close trace
+	// Step 7: Close trace and record to index
 	if tr != nil {
+		meta := tr.GetMetadata(outcome)
 		tr.Close(outcome, spawnErr)
+
+		// Index the run for fast queries
+		idx, idxErr := index.Open(workDir)
+		if idxErr != nil {
+			cmd.Printf("  Warning: index open failed: %v\n", idxErr)
+		} else {
+			if recErr := idx.Record(meta); recErr != nil {
+				cmd.Printf("  Warning: index record failed: %v\n", recErr)
+			}
+			idx.Close()
+		}
 	}
 
 	// Step 8: Record citizen experience
