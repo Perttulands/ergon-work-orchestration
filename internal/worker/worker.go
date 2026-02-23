@@ -29,7 +29,7 @@ type Result struct {
 // Spawn creates a tmux session, starts claude, sends the prompt, and waits for completion.
 func Spawn(cfg Config) (*Result, error) {
 	if err := requireTmux(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("spawn: %w", err)
 	}
 	if cfg.SessionName == "" {
 		return nil, fmt.Errorf("session name required")
@@ -152,7 +152,7 @@ func capturePane(session string) (string, error) {
 	cmd := exec.Command("tmux", "capture-pane", "-t", session, "-p")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("capture pane %s: %w", session, err)
 	}
 	return string(out), nil
 }
@@ -224,5 +224,8 @@ func isStillWorking(output string) bool {
 
 func killSession(name string) error {
 	cmd := exec.Command("tmux", "kill-session", "-t", name)
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("kill session %s: %w", name, err)
+	}
+	return nil
 }
