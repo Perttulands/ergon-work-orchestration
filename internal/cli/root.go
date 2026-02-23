@@ -20,6 +20,7 @@ func NewRoot(version string) *cobra.Command {
 	root.AddCommand(newTraceCmd())
 	root.AddCommand(newFeedCmd())
 	root.AddCommand(newDeliberateCmd())
+	root.AddCommand(newDecideCmd())
 
 	return root
 }
