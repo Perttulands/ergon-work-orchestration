@@ -1,4 +1,4 @@
-// Package ecosystem provides subprocess integration with gate, bd, bv, and learning-loop.
+// Package ecosystem provides subprocess integration with gate, br, bv, and learning-loop.
 // Every external dependency degrades gracefully if not on PATH.
 package ecosystem
 
@@ -162,51 +162,51 @@ func Available(tool string) bool {
 	return err == nil
 }
 
-// BdCreate creates a new bead and returns its ID.
-// Returns empty result with no error if bd is not available.
-func BdCreate(title, repo string) (*BeadCreateResult, error) {
-	if !Available("bd") {
+// BrCreate creates a new bead and returns its ID.
+// Returns empty result with no error if br is not available.
+func BrCreate(title, repo string) (*BeadCreateResult, error) {
+	if !Available("br") {
 		return nil, nil
 	}
 
-	args := []string{"q", title}
-	cmd := exec.Command("bd", args...)
+	args := []string{"create", title}
+	cmd := exec.Command("br", args...)
 	cmd.Dir = repo
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("bd create: %s: %w", strings.TrimSpace(string(out)), err)
+		return nil, fmt.Errorf("br create: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	id := strings.TrimSpace(string(out))
 	return &BeadCreateResult{ID: id}, nil
 }
 
-// BdClose closes a bead with a reason.
-func BdClose(id, reason, repo string) error {
-	if !Available("bd") {
+// BrClose closes a bead with a reason.
+func BrClose(id, reason, repo string) error {
+	if !Available("br") {
 		return nil
 	}
 
 	args := []string{"close", id, "--reason", reason}
-	cmd := exec.Command("bd", args...)
+	cmd := exec.Command("br", args...)
 	cmd.Dir = repo
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("bd close %s: %s: %w", id, strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("br close %s: %s: %w", id, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
 
 // --- Relay + agent state integration ---
 
-// BdAgentState sets the state of a bd agent bead.
-// Returns nil if bd is not available.
-func BdAgentState(agent, state string) error {
-	if !Available("bd") {
+// BrAgentState sets the state of a br agent bead.
+// Returns nil if br is not available.
+func BrAgentState(agent, state string) error {
+	if !Available("br") {
 		return nil
 	}
-	cmd := exec.Command("bd", "agent", "state", agent, state)
+	cmd := exec.Command("br", "agent", "state", agent, state)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("bd agent state %s %s: %s: %w", agent, state, strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("br agent state %s %s: %s: %w", agent, state, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

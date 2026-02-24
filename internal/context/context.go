@@ -14,7 +14,7 @@ import (
 	"polis/work/internal/ecosystem"
 )
 
-// BeadResult represents a bead from bd search.
+// BeadResult represents a bead from br search.
 type BeadResult struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
@@ -100,7 +100,7 @@ func Gather(cfg Config) (*Result, error) {
 		}
 	}
 
-	// 5. Query past beads via bd search
+	// 5. Query past beads via br search
 	beads, err := queryBeads(cfg)
 	if err == nil && len(beads) > 0 {
 		r.PastBeads = beads
@@ -135,10 +135,10 @@ func Gather(cfg Config) (*Result, error) {
 	return r, nil
 }
 
-// queryBeads searches bd for relevant past beads.
+// queryBeads searches br for relevant past beads.
 func queryBeads(cfg Config) ([]BeadResult, error) {
-	if _, err := exec.LookPath("bd"); err != nil {
-		return nil, fmt.Errorf("bd not on PATH")
+	if _, err := exec.LookPath("br"); err != nil {
+		return nil, fmt.Errorf("br not on PATH")
 	}
 
 	// Build search query from task description keywords
@@ -151,16 +151,16 @@ func queryBeads(cfg Config) ([]BeadResult, error) {
 	}
 
 	args := []string{"search", query, "--json", "--limit", "10", "--status", "closed"}
-	cmd := exec.Command("bd", args...)
+	cmd := exec.Command("br", args...)
 	cmd.Dir = cfg.Repo
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("bd search: %w", err)
+		return nil, fmt.Errorf("br search: %w", err)
 	}
 
 	var beads []BeadResult
 	if err := json.Unmarshal(out, &beads); err != nil {
-		return nil, fmt.Errorf("parse bd output: %w", err)
+		return nil, fmt.Errorf("parse br output: %w", err)
 	}
 
 	return beads, nil

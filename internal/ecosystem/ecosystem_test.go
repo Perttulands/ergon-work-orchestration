@@ -18,26 +18,26 @@ func TestAvailable(t *testing.T) {
 
 // --- Graceful degradation tests (projects-r03) ---
 
-func TestBdCreateWhenBdUnavailable(t *testing.T) {
-	if Available("bd") {
-		t.Skip("bd is available; this test covers the missing-bd path")
+func TestBrCreateWhenBrUnavailable(t *testing.T) {
+	if Available("br") {
+		t.Skip("br is available; this test covers the missing-br path")
 	}
-	result, err := BdCreate("test task", "/tmp")
+	result, err := BrCreate("test task", "/tmp")
 	if err != nil {
-		t.Errorf("should return nil error when bd unavailable, got: %v", err)
+		t.Errorf("should return nil error when br unavailable, got: %v", err)
 	}
 	if result != nil {
-		t.Error("should return nil result when bd unavailable")
+		t.Error("should return nil result when br unavailable")
 	}
 }
 
-func TestBdCloseWhenBdUnavailable(t *testing.T) {
-	if Available("bd") {
-		t.Skip("bd is available; this test covers the missing-bd path")
+func TestBrCloseWhenBrUnavailable(t *testing.T) {
+	if Available("br") {
+		t.Skip("br is available; this test covers the missing-br path")
 	}
-	err := BdClose("test-id", "reason", "/tmp")
+	err := BrClose("test-id", "reason", "/tmp")
 	if err != nil {
-		t.Errorf("should return nil error when bd unavailable, got: %v", err)
+		t.Errorf("should return nil error when br unavailable, got: %v", err)
 	}
 }
 
@@ -54,13 +54,13 @@ func TestGateCheckWhenGateUnavailable(t *testing.T) {
 	}
 }
 
-// When bd IS available, test that BdCreate returns a real result.
-func TestBdCreateWhenBdAvailable(t *testing.T) {
-	if !Available("bd") {
-		t.Skip("bd not available")
+// When br IS available, test that BrCreate returns a real result.
+func TestBrCreateWhenBrAvailable(t *testing.T) {
+	if !Available("br") {
+		t.Skip("br not available")
 	}
-	// bd q requires a valid .beads directory; just verify it doesn't panic
-	_, err := BdCreate("degradation test probe", "/tmp")
+	// br create requires a valid .beads directory; just verify it doesn't panic
+	_, err := BrCreate("degradation test probe", "/tmp")
 	// Error is expected (no .beads dir in /tmp), but it shouldn't be nil-pointer or panic
 	if err != nil {
 		t.Logf("expected error from /tmp (no .beads): %v", err)
@@ -174,6 +174,35 @@ func TestBvPlanWhenBvAvailable(t *testing.T) {
 	}
 	if result.Plan.TotalActionable == 0 {
 		t.Log("bv plan shows 0 actionable items")
+	}
+}
+
+// --- Relay + agent state degradation tests ---
+
+func TestBrAgentStateWhenBrUnavailable(t *testing.T) {
+	if Available("br") {
+		t.Skip("br is available")
+	}
+	if err := BrAgentState("test-agent", "working"); err != nil {
+		t.Errorf("should return nil when br unavailable, got: %v", err)
+	}
+}
+
+func TestRelayHeartbeatWhenRelayUnavailable(t *testing.T) {
+	if Available("relay") {
+		t.Skip("relay is available")
+	}
+	if err := RelayHeartbeat("test-agent"); err != nil {
+		t.Errorf("should return nil when relay unavailable, got: %v", err)
+	}
+}
+
+func TestRelaySendWhenRelayUnavailable(t *testing.T) {
+	if Available("relay") {
+		t.Skip("relay is available")
+	}
+	if err := RelaySend("zeus", "athena", "test", "thread-1"); err != nil {
+		t.Errorf("should return nil when relay unavailable, got: %v", err)
 	}
 }
 

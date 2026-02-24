@@ -96,7 +96,7 @@ func TestRunCommandFlags(t *testing.T) {
 	}
 
 	// Check flags exist
-	flags := []string{"repo", "citizen", "deadline"}
+	flags := []string{"repo", "citizen", "deadline", "notify"}
 	for _, name := range flags {
 		if runCmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected flag --%s to exist", name)

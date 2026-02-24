@@ -94,14 +94,14 @@ func runDeliberate(cmd *cobra.Command, question, caseType string, participants i
 	// Step 1: Create molecule bead
 	beadID := "work-" + randomID()
 	title := fmt.Sprintf("deliberate: %s", truncate(question, 60))
-	bead, err := ecosystem.BdCreate(title, repo)
+	bead, err := ecosystem.BrCreate(title, repo)
 	if err != nil {
-		cmd.Printf("  Warning: bd create failed: %v\n", err)
+		cmd.Printf("  Warning: br create failed: %v\n", err)
 	} else if bead != nil {
 		beadID = bead.ID
 		cmd.Printf("  Bead: %s (molecule)\n", beadID)
 	} else {
-		cmd.Printf("  Note: bd not available, using generated ID: %s\n", beadID)
+		cmd.Printf("  Note: br not available, using generated ID: %s\n", beadID)
 	}
 
 	// Step 2: Write case file
@@ -190,8 +190,8 @@ func runDeliberate(cmd *cobra.Command, question, caseType string, participants i
 	}
 
 	if bead != nil {
-		if closeErr := ecosystem.BdClose(beadID, closeReason, repo); closeErr != nil {
-			cmd.Printf("  Warning: bd close failed: %v\n", closeErr)
+		if closeErr := ecosystem.BrClose(beadID, closeReason, repo); closeErr != nil {
+			cmd.Printf("  Warning: br close failed: %v\n", closeErr)
 		}
 	}
 

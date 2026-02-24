@@ -21,36 +21,38 @@ func newRunCmd() *cobra.Command {
 		repo     string
 		citizen  string
 		deadline time.Duration
+		notify   string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "run <task>",
 		Short: "Run a task — full lifecycle with context, worker, and tracing",
 		Long: `Orchestrates the full work lifecycle:
-1. Creates a bead (bd create) — identity from the start
-2. Gathers context — past beads, citizen experience, patterns
-3. Assembles a rich prompt — task + context + quality expectations
-4. Spawns a Claude Code worker in tmux
-5. Opens a trace — timestamped JSONL events
-6. On completion: calls gate check for quality (if available)
-7. Closes trace with outcome
-8. Records the experience — appends to citizen's history
-9. Closes the bead`,
+1. Creates a bead — identity from the start
+2. Sets agent state to working, sends relay heartbeat
+3. Gathers context — bv search/related/plan, past beads, citizen experience
+4. Assembles a rich prompt — task + context + quality expectations
+5. Spawns a Claude Code worker in tmux
+6. Opens a trace — timestamped JSONL events
+7. On completion: gate check, close trace, derive close reason
+8. Records experience, sends relay notifications
+9. Sets agent state to idle, closes the bead`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			task := args[0]
-			return runTask(cmd, task, repo, citizen, deadline)
+			return runTask(cmd, task, repo, citizen, deadline, notify)
 		},
 	}
 
 	cmd.Flags().StringVar(&repo, "repo", "", "repository path (default: cwd)")
 	cmd.Flags().StringVar(&citizen, "citizen", "", "citizen name (default: worker)")
 	cmd.Flags().DurationVar(&deadline, "deadline", 30*time.Minute, "max time for the worker")
+	cmd.Flags().StringVar(&notify, "notify", "", "agent to notify on completion (in addition to athena)")
 
 	return cmd
 }
 
-func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Duration) error {
+func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Duration, notify string) error {
 	// Defaults
 	if repo == "" {
 		wd, err := os.Getwd()
@@ -74,14 +76,22 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 
 	// Step 1: Create bead
 	beadID := "work-" + randomID()
-	bead, err := ecosystem.BdCreate(task, repo)
+	bead, err := ecosystem.BrCreate(task, repo)
 	if err != nil {
-		cmd.Printf("  Warning: bd create failed: %v (continuing without bead tracking)\n", err)
+		cmd.Printf("  Warning: br create failed: %v (continuing without bead tracking)\n", err)
 	} else if bead != nil {
 		beadID = bead.ID
 		cmd.Printf("  Bead: %s\n", beadID)
 	} else {
-		cmd.Printf("  Note: bd not available, using generated ID: %s\n", beadID)
+		cmd.Printf("  Note: br not available, using generated ID: %s\n", beadID)
+	}
+
+	// Step 1b: Agent state → working + relay heartbeat
+	if err := ecosystem.BrAgentState(citizen, "working"); err != nil {
+		cmd.Printf("  Warning: br agent state: %v\n", err)
+	}
+	if err := ecosystem.RelayHeartbeat(citizen); err != nil {
+		cmd.Printf("  Warning: relay heartbeat: %v\n", err)
 	}
 
 	// Step 2: Gather context
@@ -188,12 +198,39 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		cmd.Printf("  Warning: failed to record experience: %v\n", expErr)
 	}
 
-	// Step 10: Close bead
-	if bead != nil {
-		reason := fmt.Sprintf("%s: %s", outcome, task)
-		if closeErr := ecosystem.BdClose(beadID, reason, repo); closeErr != nil {
-			cmd.Printf("  Warning: bd close failed: %v\n", closeErr)
+	// Step 10: Auto close reason from trace + diff
+	closeReason := fmt.Sprintf("%s: %s", outcome, task)
+	if tr != nil {
+		cr, crErr := ecosystem.DeriveCloseReason(tr.FilePath(), repo)
+		if crErr != nil {
+			cmd.Printf("  Warning: derive close reason: %v\n", crErr)
+		} else {
+			closeReason = ecosystem.FormatCloseReason(cr)
+			cmd.Printf("  Close reason: %s\n", closeReason)
 		}
+	}
+
+	// Step 11: Close bead with derived reason
+	if bead != nil {
+		if closeErr := ecosystem.BrClose(beadID, closeReason, repo); closeErr != nil {
+			cmd.Printf("  Warning: br close failed: %v\n", closeErr)
+		}
+	}
+
+	// Step 12: Relay notification
+	summary := fmt.Sprintf("[%s] %s — %s (%s)", beadID, task, outcome, closeReason)
+	if err := ecosystem.RelaySend(citizen, "athena", summary, beadID); err != nil {
+		cmd.Printf("  Warning: relay send athena: %v\n", err)
+	}
+	if notify != "" && notify != "athena" {
+		if err := ecosystem.RelaySend(citizen, notify, summary, beadID); err != nil {
+			cmd.Printf("  Warning: relay send %s: %v\n", notify, err)
+		}
+	}
+
+	// Step 13: Agent state → idle
+	if err := ecosystem.BrAgentState(citizen, "idle"); err != nil {
+		cmd.Printf("  Warning: br agent state idle: %v\n", err)
 	}
 
 	cmd.Printf("Done: %s [%s]\n", beadID, outcome)

@@ -31,8 +31,8 @@ func TestGatherDegradesFully(t *testing.T) {
 	}
 }
 
-// Graceful degradation: Gather with citizen file but no bd/loop.
-func TestGatherWithCitizenButNoBdOrLoop(t *testing.T) {
+// Graceful degradation: Gather with citizen file but no br/loop.
+func TestGatherWithCitizenButNoBrOrLoop(t *testing.T) {
 	workDir := t.TempDir()
 	citizenDir := filepath.Join(workDir, "citizens")
 	os.MkdirAll(citizenDir, 0o755)

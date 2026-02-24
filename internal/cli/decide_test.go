@@ -42,7 +42,7 @@ func TestDecideCommandFlags(t *testing.T) {
 }
 
 func TestGatherBeadEvidence(t *testing.T) {
-	// When bd is available, gatherBeadEvidence on a nonexistent bead returns empty
+	// When br is available, gatherBeadEvidence on a nonexistent bead returns empty
 	result := gatherBeadEvidence("nonexistent-bead-xyz-12345", "/tmp")
 	if result != "" {
 		t.Errorf("expected empty string for nonexistent bead, got %q", result)

@@ -23,7 +23,7 @@ work feed --since 24h          # structured output for learning-loop
 
 ## What Happens When You Run `work run`
 
-1. Creates a bead (`bd create`) — the work has identity from the start
+1. Creates a bead (`br create`) — the work has identity from the start
 2. Gathers context — queries past beads, citizen experience, repo history
 3. Assembles a rich prompt — task + context + quality expectations + citizen identity
 4. Spawns a Claude Code worker in tmux (unsets CLAUDECODE, sets deadline)
@@ -34,7 +34,7 @@ work feed --since 24h          # structured output for learning-loop
 9. Closes the bead
 
 If `gate` isn't on PATH: skip step 6, warn, continue.
-If `bd` isn't available: still works, just no bead tracking.
+If `br` isn't available: still works, just no bead tracking.
 Graceful degradation everywhere.
 
 ## The Context Engine
@@ -80,7 +80,7 @@ SQLite index for fast queries.
 ## Technical
 
 - **Language:** Go
-- **Dependencies:** tmux (for workers), bd (optional), gate (optional)
+- **Dependencies:** tmux (for workers), br (optional), gate (optional)
 - **Integration:** subprocess calls, JSON on stdout, exit codes
 - **Concurrency:** multiple workers tracked simultaneously
 - **Retention:** configurable, default 30 days for traces
@@ -98,4 +98,4 @@ SQLite index for fast queries.
 - `work context` returns useful, relevant advice from past runs
 - After 20 runs, measurably better outcomes than run 1
 - Another agent can read a trace and understand what happened
-- Works standalone (no gate, no bd) with graceful degradation
+- Works standalone (no gate, no br) with graceful degradation

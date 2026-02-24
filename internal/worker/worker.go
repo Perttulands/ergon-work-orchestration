@@ -49,7 +49,7 @@ func Spawn(cfg Config) (*Result, error) {
 	}
 
 	// 2. Unset CLAUDECODE (critical — nested sessions crash otherwise)
-	if err := sendKeys(cfg.SessionName, "unset CLAUDE_CODE_ENTRYPOINT ANTHROPIC_API_KEY_PARENT"); err != nil {
+	if err := sendKeys(cfg.SessionName, "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT ANTHROPIC_API_KEY_PARENT"); err != nil {
 		killSession(cfg.SessionName)
 		return nil, fmt.Errorf("unset env: %w", err)
 	}

@@ -27,7 +27,7 @@ func newDecideCmd() *cobra.Command {
 1. Creates a gate bead (blocks until decided)
 2. Assembles evidence from linked beads
 3. Sends question + evidence to decider via relay
-4. Prints gate bead ID — close with: bd close <id> --reason "decision + reasoning"`,
+4. Prints gate bead ID — close with: br close <id> --reason "decision + reasoning"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			question := args[0]
@@ -60,14 +60,14 @@ func runDecide(cmd *cobra.Command, question string, evidence []string, decider, 
 	// Step 1: Create gate bead
 	beadID := "work-" + randomID()
 	title := fmt.Sprintf("decide: %s", truncate(question, 60))
-	bead, err := ecosystem.BdCreate(title, repo)
+	bead, err := ecosystem.BrCreate(title, repo)
 	if err != nil {
-		cmd.Printf("  Warning: bd create failed: %v\n", err)
+		cmd.Printf("  Warning: br create failed: %v\n", err)
 	} else if bead != nil {
 		beadID = bead.ID
 		cmd.Printf("  Gate bead: %s\n", beadID)
 	} else {
-		cmd.Printf("  Note: bd not available, using generated ID: %s\n", beadID)
+		cmd.Printf("  Note: br not available, using generated ID: %s\n", beadID)
 	}
 
 	// Step 2: Assemble evidence from linked beads
@@ -85,7 +85,7 @@ func runDecide(cmd *cobra.Command, question string, evidence []string, decider, 
 	}
 
 	// Step 3: Send notification via relay
-	message := fmt.Sprintf("DECISION REQUESTED [%s]\n\nGate: %s\nQuestion: %s\nPriority: %s\nTime: %s%s\n\nTo rule: bd close %s --reason \"your decision + reasoning\"",
+	message := fmt.Sprintf("DECISION REQUESTED [%s]\n\nGate: %s\nQuestion: %s\nPriority: %s\nTime: %s%s\n\nTo rule: br close %s --reason \"your decision + reasoning\"",
 		priority, beadID, question, priority, time.Now().Format(time.RFC3339), evidenceText.String(), beadID)
 
 	if ecosystem.Available("relay") {
@@ -107,18 +107,18 @@ func runDecide(cmd *cobra.Command, question string, evidence []string, decider, 
 	}
 
 	cmd.Printf("\nGate bead: %s\n", beadID)
-	cmd.Printf("To rule:   bd close %s --reason \"decision + reasoning\"\n", beadID)
+	cmd.Printf("To rule:   br close %s --reason \"decision + reasoning\"\n", beadID)
 
 	return nil
 }
 
 // gatherBeadEvidence retrieves a bead's description for evidence assembly.
 func gatherBeadEvidence(beadID, repo string) string {
-	if !ecosystem.Available("bd") {
+	if !ecosystem.Available("br") {
 		return ""
 	}
 
-	cmd := exec.Command("bd", "show", beadID)
+	cmd := exec.Command("br", "show", beadID)
 	cmd.Dir = repo
 	out, err := cmd.Output()
 	if err != nil {
