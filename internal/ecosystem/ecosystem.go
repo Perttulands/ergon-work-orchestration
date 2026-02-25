@@ -374,7 +374,8 @@ func QueryLearningLoop(task string) ([]byte, error) {
 	cmd := exec.Command("loop", "query", task, "--json")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, nil // graceful degradation
+		log.Printf("warning: loop query failed: %v", err)
+		return nil, nil // graceful degradation — loop may not have data yet
 	}
 	return out, nil
 }
@@ -403,12 +404,15 @@ func IngestRun(beadID, task, outcome, agent string, durationSec int64, testsPass
 
 	data, err := json.Marshal(run)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal run data for ingest: %w", err)
 	}
 
 	cmd := exec.Command("loop", "ingest", "-")
 	cmd.Stdin = bytes.NewReader(data)
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("loop ingest: %w", err)
+	}
+	return nil
 }
 
 // CollectFeedback writes a run record and calls feedback-collector.sh.

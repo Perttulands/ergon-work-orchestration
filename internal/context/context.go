@@ -296,7 +296,7 @@ func readPRD(repo string) (string, error) {
 	path := filepath.Join(repo, "PRD.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read PRD %s: %w", path, err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }
