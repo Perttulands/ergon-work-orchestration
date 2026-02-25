@@ -193,6 +193,19 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		cmd.Printf("  Warning: feedback collection failed: %v\n", fbErr)
 	}
 
+	// Step 8b: Feed run to learning-loop binary for pattern extraction
+	{
+		testsPassed := gateResult != nil && gateResult.Pass
+		lintPassed := gateResult != nil && gateResult.Pass
+		var errMsg string
+		if spawnErr != nil {
+			errMsg = spawnErr.Error()
+		}
+		if ingestErr := ecosystem.IngestRun(beadID, task, outcome, citizen, durationS, testsPassed, lintPassed, nil, errMsg); ingestErr != nil {
+			cmd.Printf("  Warning: loop ingest failed: %v\n", ingestErr)
+		}
+	}
+
 	// Step 9: Record citizen experience
 	if expErr := workctx.AppendCitizenExperience(workDir, citizen, task, outcome, beadID); expErr != nil {
 		cmd.Printf("  Warning: failed to record experience: %v\n", expErr)

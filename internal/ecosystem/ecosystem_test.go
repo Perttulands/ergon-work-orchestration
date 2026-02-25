@@ -252,6 +252,39 @@ func TestRelaySendTypedWhenRelayUnavailable(t *testing.T) {
 	}
 }
 
+// --- loop binary integration tests ---
+
+func TestQueryLearningLoopWhenUnavailable(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
+	result, err := QueryLearningLoop("fix a bug")
+	if err != nil {
+		t.Errorf("should return nil error when loop unavailable, got: %v", err)
+	}
+	if result != nil {
+		t.Error("should return nil result when loop unavailable")
+	}
+}
+
+func TestQueryLearningLoopEmptyTask(t *testing.T) {
+	result, err := QueryLearningLoop("")
+	if err != nil {
+		t.Errorf("empty task should return nil error, got: %v", err)
+	}
+	if result != nil {
+		t.Error("empty task should return nil result")
+	}
+}
+
+func TestIngestRunWhenUnavailable(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
+	err := IngestRun("bead-1", "fix a bug", "success", "worker", 120, true, true, nil, "")
+	if err != nil {
+		t.Errorf("should return nil error when loop unavailable, got: %v", err)
+	}
+}
+
 // --- Learning-loop integration tests ---
 
 func TestLearningLoopDirFromEnv(t *testing.T) {

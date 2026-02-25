@@ -352,6 +352,58 @@ func TestGatherWithLearningLoop(t *testing.T) {
 	}
 }
 
+func TestFormatLearningInsights(t *testing.T) {
+	raw := `{
+		"query": "fix a bug",
+		"total_runs": 20,
+		"matched_runs": 5,
+		"success_rate": 0.8,
+		"insights": [
+			{"text": "Always run tests before committing.", "confidence": 0.9},
+			{"text": "Check error handling paths.", "confidence": 0.7}
+		],
+		"top_patterns": [
+			{"name": "missing-tests", "count": 3, "impact": "high"}
+		],
+		"success_signals": ["Ran tests and they passed"]
+	}`
+
+	result := formatLearningInsights([]byte(raw))
+	if !strings.Contains(result, "## Learning (from past runs)") {
+		t.Error("missing header")
+	}
+	if !strings.Contains(result, "5 similar runs") {
+		t.Error("missing matched runs count")
+	}
+	if !strings.Contains(result, "80% success") {
+		t.Error("missing success rate")
+	}
+	if !strings.Contains(result, "Always run tests") {
+		t.Error("missing insight text")
+	}
+	if !strings.Contains(result, "missing-tests") {
+		t.Error("missing pattern name")
+	}
+	if !strings.Contains(result, "Ran tests and they passed") {
+		t.Error("missing success signal")
+	}
+}
+
+func TestFormatLearningInsightsEmpty(t *testing.T) {
+	raw := `{"matched_runs": 0, "success_rate": 0, "insights": [], "top_patterns": [], "success_signals": []}`
+	result := formatLearningInsights([]byte(raw))
+	if result != "" {
+		t.Errorf("expected empty string for zero matches, got %q", result)
+	}
+}
+
+func TestFormatLearningInsightsInvalidJSON(t *testing.T) {
+	result := formatLearningInsights([]byte("not json"))
+	if result != "" {
+		t.Errorf("expected empty string for invalid JSON, got %q", result)
+	}
+}
+
 func TestGatherWithoutLearningLoop(t *testing.T) {
 	t.Setenv("LEARNING_LOOP_DIR", t.TempDir())
 

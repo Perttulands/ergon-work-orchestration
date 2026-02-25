@@ -3,6 +3,7 @@
 package ecosystem
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // BvSearchResult is one hit from bv --robot-search.
@@ -358,6 +360,55 @@ func SelectTemplate(task string) (*TemplateSelection, error) {
 		return nil, fmt.Errorf("parse select-template output: %w", err)
 	}
 	return &sel, nil
+}
+
+// QueryLearningLoop calls `loop query <task> --json` and returns structured results.
+// Returns nil, nil on graceful degradation (loop not on PATH or no results).
+func QueryLearningLoop(task string) ([]byte, error) {
+	if !Available("loop") {
+		return nil, nil
+	}
+	if task == "" {
+		return nil, nil
+	}
+	cmd := exec.Command("loop", "query", task, "--json")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, nil // graceful degradation
+	}
+	return out, nil
+}
+
+// IngestRun feeds a completed work run to learning-loop for pattern extraction.
+// Returns nil if loop is not on PATH.
+func IngestRun(beadID, task, outcome, agent string, durationSec int64, testsPassed, lintPassed bool, filesChanged []string, errMsg string) error {
+	if !Available("loop") {
+		return nil
+	}
+
+	run := map[string]interface{}{
+		"id":               beadID,
+		"task":             task,
+		"outcome":          outcome,
+		"agent":            agent,
+		"duration_seconds": durationSec,
+		"tests_passed":     testsPassed,
+		"lint_passed":      lintPassed,
+		"files_touched":    filesChanged,
+		"timestamp":        time.Now().UTC().Format(time.RFC3339),
+	}
+	if errMsg != "" {
+		run["error_message"] = errMsg
+	}
+
+	data, err := json.Marshal(run)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command("loop", "ingest", "-")
+	cmd.Stdin = bytes.NewReader(data)
+	return cmd.Run()
 }
 
 // CollectFeedback writes a run record and calls feedback-collector.sh.

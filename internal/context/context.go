@@ -39,6 +39,7 @@ type Result struct {
 	PastBeads          []BeadResult
 	CitizenExperience  string
 	LearningPatterns   string
+	LearningInsights   string // formatted output from loop query
 	TemplateSelection  *ecosystem.TemplateSelection
 	BvSearch           *ecosystem.BvSearchResponse
 	BvRelated          *ecosystem.BvRelatedResponse
@@ -116,7 +117,18 @@ func Gather(cfg Config) (*Result, error) {
 		}
 	}
 
-	// 7. Learning-loop: select-template recommendation
+	// 7. Learning-loop: query past run insights
+	if cfg.Task != "" {
+		if raw, err := ecosystem.QueryLearningLoop(cfg.Task); err == nil && len(raw) > 0 {
+			formatted := formatLearningInsights(raw)
+			if formatted != "" {
+				r.LearningInsights = formatted
+				sections = append(sections, formatted)
+			}
+		}
+	}
+
+	// 8. Learning-loop: select-template recommendation
 	if cfg.Task != "" {
 		sel, err := ecosystem.SelectTemplate(cfg.Task)
 		if err == nil && sel != nil {
@@ -217,6 +229,66 @@ func formatCitizenExperience(citizen, exp string) string {
 
 func formatPatterns(patterns string) string {
 	return fmt.Sprintf("## Learned Patterns\n\n%s", patterns)
+}
+
+// formatLearningInsights formats the JSON output from `loop query --json` as
+// injectable markdown context. The JSON matches the learning-loop query.Result
+// structure with fields: matched_runs, success_rate, insights, top_patterns,
+// success_signals, relevant_runs.
+func formatLearningInsights(raw []byte) string {
+	var result struct {
+		MatchedRuns    int     `json:"matched_runs"`
+		SuccessRate    float64 `json:"success_rate"`
+		Insights       []struct {
+			Text       string  `json:"text"`
+			Confidence float64 `json:"confidence"`
+		} `json:"insights"`
+		TopPatterns []struct {
+			Name   string `json:"name"`
+			Count  int    `json:"count"`
+			Impact string `json:"impact"`
+		} `json:"top_patterns"`
+		SuccessSignals []string `json:"success_signals"`
+	}
+
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return ""
+	}
+
+	// Nothing useful to show
+	if result.MatchedRuns == 0 && len(result.Insights) == 0 {
+		return ""
+	}
+
+	var buf strings.Builder
+	buf.WriteString("## Learning (from past runs)\n\n")
+	buf.WriteString(fmt.Sprintf("From %d similar runs (%.0f%% success rate)\n\n", result.MatchedRuns, result.SuccessRate*100))
+
+	for i, ins := range result.Insights {
+		if i >= 5 {
+			break
+		}
+		buf.WriteString(fmt.Sprintf("- %s\n", ins.Text))
+	}
+
+	if len(result.TopPatterns) > 0 {
+		buf.WriteString("\n**Watch out:**\n")
+		for i, p := range result.TopPatterns {
+			if i >= 5 {
+				break
+			}
+			buf.WriteString(fmt.Sprintf("- %s (%dx, %s impact)\n", p.Name, p.Count, p.Impact))
+		}
+	}
+
+	if len(result.SuccessSignals) > 0 {
+		buf.WriteString("\n**What works:**\n")
+		for _, sig := range result.SuccessSignals {
+			buf.WriteString(fmt.Sprintf("- %s\n", sig))
+		}
+	}
+
+	return buf.String()
 }
 
 // readPRD reads PRD.md from the repo root. Returns empty string if not found.
