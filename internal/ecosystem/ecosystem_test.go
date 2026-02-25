@@ -239,7 +239,15 @@ func TestRelayHeartbeatWhenRelayUnavailable(t *testing.T) {
 func TestRelaySendWhenRelayUnavailable(t *testing.T) {
 	testutil.SandboxPATH(t, nil)
 
-	if err := RelaySend("zeus", "athena", "test", "thread-1"); err != nil {
+	if err := RelaySend("zeus", "athena", "test", "thread-1", "", ""); err != nil {
+		t.Errorf("should return nil when relay unavailable, got: %v", err)
+	}
+}
+
+func TestRelaySendTypedWhenRelayUnavailable(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
+	if err := RelaySend("zeus", "athena", "task done", "bead-1", "task_result", `{"bead_id":"bead-1","outcome":"success"}`); err != nil {
 		t.Errorf("should return nil when relay unavailable, got: %v", err)
 	}
 }

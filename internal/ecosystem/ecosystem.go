@@ -225,14 +225,21 @@ func RelayHeartbeat(agent string) error {
 }
 
 // RelaySend sends a message from one agent to another, optionally threaded.
+// msgType and payload are optional — pass empty strings to omit.
 // Returns nil if relay is not available.
-func RelaySend(from, to, message, thread string) error {
+func RelaySend(from, to, message, thread, msgType, payload string) error {
 	if !Available("relay") {
 		return nil
 	}
 	args := []string{"send", to, message, "--agent", from}
 	if thread != "" {
 		args = append(args, "--thread", thread)
+	}
+	if msgType != "" {
+		args = append(args, "--type", msgType)
+	}
+	if payload != "" {
+		args = append(args, "--payload", payload)
 	}
 	cmd := exec.Command("relay", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {

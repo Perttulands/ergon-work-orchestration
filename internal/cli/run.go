@@ -217,13 +217,19 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		}
 	}
 
-	// Step 12: Relay notification
+	// Step 12: Relay notification (typed task_result messages)
 	summary := fmt.Sprintf("[%s] %s — %s (%s)", beadID, task, outcome, closeReason)
-	if err := ecosystem.RelaySend(citizen, "athena", summary, beadID); err != nil {
+	gateScoreStr := "null"
+	if gateResult != nil {
+		gateScoreStr = fmt.Sprintf("%.2f", gateResult.Score)
+	}
+	relayPayload := fmt.Sprintf(`{"bead_id":"%s","outcome":"%s","gate_score":%s,"duration":"%ds"}`,
+		beadID, outcome, gateScoreStr, durationS)
+	if err := ecosystem.RelaySend(citizen, "athena", summary, beadID, "task_result", relayPayload); err != nil {
 		cmd.Printf("  Warning: relay send athena: %v\n", err)
 	}
 	if notify != "" && notify != "athena" {
-		if err := ecosystem.RelaySend(citizen, notify, summary, beadID); err != nil {
+		if err := ecosystem.RelaySend(citizen, notify, summary, beadID, "task_result", relayPayload); err != nil {
 			cmd.Printf("  Warning: relay send %s: %v\n", notify, err)
 		}
 	}
