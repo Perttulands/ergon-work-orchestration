@@ -1,2 +1,31 @@
-# bv (beads viewer) local config and caches
+# Build output
+work
+*.exe
+
+# Polis-owned (city data, layered on when installed — never tracked upstream)
+.beads/
 .bv/
+memory/
+transcripts/
+traces/
+polis.yaml
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Runtime
+*.log
+*.tmp
+*.db
+*.db-shm
+*.db-wal
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store

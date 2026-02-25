@@ -1,0 +1,4 @@
+[city]
+schema_version = 1
+polis_files = []
+standalone_check = "go test ./..."
