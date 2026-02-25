@@ -14,15 +14,15 @@ import (
 
 // FeedEntry is the stable contract between work and learning-loop.
 type FeedEntry struct {
-	BeadID   string  `json:"bead_id"`
-	Citizen  string  `json:"citizen"`
-	Task     string  `json:"task"`
-	Outcome  string  `json:"outcome"`
-	Duration int64   `json:"duration_s"`
-	GatePass *bool   `json:"gate_pass,omitempty"`
+	BeadID    string   `json:"bead_id"`
+	Citizen   string   `json:"citizen"`
+	Task      string   `json:"task"`
+	Outcome   string   `json:"outcome"`
+	Duration  int64    `json:"duration_s"`
+	GatePass  *bool    `json:"gate_pass,omitempty"`
 	GateScore *float64 `json:"gate_score,omitempty"`
-	Error    string  `json:"error,omitempty"`
-	Time     string  `json:"time"`
+	Error     string   `json:"error,omitempty"`
+	Time      string   `json:"time"`
 }
 
 func newFeedCmd() *cobra.Command {

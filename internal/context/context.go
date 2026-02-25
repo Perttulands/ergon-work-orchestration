@@ -36,16 +36,16 @@ type Config struct {
 
 // Result holds the assembled context.
 type Result struct {
-	PastBeads          []BeadResult
-	CitizenExperience  string
-	LearningPatterns   string
-	LearningInsights   string // formatted output from loop query
-	TemplateSelection  *ecosystem.TemplateSelection
-	BvSearch           *ecosystem.BvSearchResponse
-	BvRelated          *ecosystem.BvRelatedResponse
-	BvPlan             *ecosystem.BvPlanResponse
-	PRD                string // contents of PRD.md from repo
-	Markdown           string // final assembled markdown
+	PastBeads         []BeadResult
+	CitizenExperience string
+	LearningPatterns  string
+	LearningInsights  string // formatted output from loop query
+	TemplateSelection *ecosystem.TemplateSelection
+	BvSearch          *ecosystem.BvSearchResponse
+	BvRelated         *ecosystem.BvRelatedResponse
+	BvPlan            *ecosystem.BvPlanResponse
+	PRD               string // contents of PRD.md from repo
+	Markdown          string // final assembled markdown
 }
 
 // Gather collects all available context and assembles it into injectable markdown.
@@ -237,9 +237,9 @@ func formatPatterns(patterns string) string {
 // success_signals, relevant_runs.
 func formatLearningInsights(raw []byte) string {
 	var result struct {
-		MatchedRuns    int     `json:"matched_runs"`
-		SuccessRate    float64 `json:"success_rate"`
-		Insights       []struct {
+		MatchedRuns int     `json:"matched_runs"`
+		SuccessRate float64 `json:"success_rate"`
+		Insights    []struct {
 			Text       string  `json:"text"`
 			Confidence float64 `json:"confidence"`
 		} `json:"insights"`
