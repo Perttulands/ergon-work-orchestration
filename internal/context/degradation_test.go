@@ -5,10 +5,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"polis/work/internal/testutil"
 )
 
 // Graceful degradation: Gather works even when nothing is available.
 func TestGatherDegradesFully(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
 	cfg := Config{
 		WorkDir:   t.TempDir(),
 		BeadsRoot: t.TempDir(), // isolate from real bv data
@@ -33,6 +37,8 @@ func TestGatherDegradesFully(t *testing.T) {
 
 // Graceful degradation: Gather with citizen file but no br/loop.
 func TestGatherWithCitizenButNoBrOrLoop(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
 	workDir := t.TempDir()
 	citizenDir := filepath.Join(workDir, "citizens")
 	os.MkdirAll(citizenDir, 0o755)
@@ -66,6 +72,8 @@ func TestGatherWithCitizenButNoBrOrLoop(t *testing.T) {
 
 // Graceful degradation: Gather with missing citizen file continues.
 func TestGatherMissingCitizenFileOK(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
 	cfg := Config{
 		Citizen:   "nonexistent-citizen",
 		WorkDir:   t.TempDir(),

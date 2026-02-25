@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"polis/work/internal/ecosystem"
+	"polis/work/internal/testutil"
 )
 
 func TestReadCitizenExperience(t *testing.T) {
@@ -74,6 +75,8 @@ func TestFormatPatterns(t *testing.T) {
 }
 
 func TestGatherWithCitizenOnly(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
 	workDir := t.TempDir()
 	citizenDir := filepath.Join(workDir, "citizens")
 	if err := os.MkdirAll(citizenDir, 0o755); err != nil {
@@ -102,6 +105,8 @@ func TestGatherWithCitizenOnly(t *testing.T) {
 }
 
 func TestGatherNoContext(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
 	cfg := Config{
 		WorkDir:   t.TempDir(),
 		BeadsRoot: t.TempDir(), // isolate from real bv data
@@ -243,15 +248,29 @@ func TestReadPRDMissing(t *testing.T) {
 
 // Test that Gather with real bv produces bv sections when BeadsRoot has data.
 func TestGatherWithBv(t *testing.T) {
-	if !ecosystem.Available("bv") {
-		t.Skip("bv not available")
-	}
+	testutil.SandboxPATH(t, map[string]string{
+		"bv": `
+case "$1" in
+  --robot-search)
+    printf '%s\n' '{"results":[{"issue_id":"projects-i01","score":0.88,"title":"Wire bv into work"}]}'
+    ;;
+  --robot-related)
+    printf '%s\n' '{"target_bead_id":"projects-i01","target_title":"Wire bv into work","concurrent":[{"bead_id":"projects-a11","title":"Context budget handoff","status":"open","relation_type":"concurrent","relevance":82,"reason":"Touches same context flow"}],"total_related":1}'
+    ;;
+  --robot-plan)
+    printf '%s\n' '{"plan":{"tracks":[{"track_id":"A","items":[{"id":"projects-i01","title":"Wire bv into work","priority":0,"status":"open","unblocks":["projects-i02"]}],"reason":"Critical path"}],"total_actionable":1,"total_blocked":0,"summary":{"highest_impact":"projects-i01","impact_reason":"Unblocks downstream work","unblocks_count":1}}}'
+    ;;
+  *)
+    exit 1
+    ;;
+esac`,
+	})
 
 	cfg := Config{
 		Task:      "wire bv integration",
 		BeadID:    "projects-i01",
 		WorkDir:   t.TempDir(),
-		BeadsRoot: "/home/polis/projects",
+		BeadsRoot: t.TempDir(),
 	}
 	result, err := Gather(cfg)
 	if err != nil {

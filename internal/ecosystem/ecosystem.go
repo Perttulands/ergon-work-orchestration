@@ -248,7 +248,7 @@ func GateCheck(repo, citizen string) (*GateResult, error) {
 		return nil, nil
 	}
 
-	args := []string{"check", "--json"}
+	args := []string{"check", ".", "--json"}
 	if citizen != "" {
 		args = append(args, "--citizen", citizen)
 	}

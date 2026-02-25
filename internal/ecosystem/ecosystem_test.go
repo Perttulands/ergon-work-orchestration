@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"polis/work/internal/testutil"
 )
 
 func TestAvailable(t *testing.T) {
-	if !Available("tmux") {
-		t.Error("expected tmux to be available")
+	if !Available("sh") {
+		t.Error("expected sh to be available")
 	}
 	if Available("nonexistent-tool-xyz-12345") {
 		t.Error("expected nonexistent tool to not be available")
@@ -19,9 +21,8 @@ func TestAvailable(t *testing.T) {
 // --- Graceful degradation tests (projects-r03) ---
 
 func TestBrCreateWhenBrUnavailable(t *testing.T) {
-	if Available("br") {
-		t.Skip("br is available; this test covers the missing-br path")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	result, err := BrCreate("test task", "/tmp")
 	if err != nil {
 		t.Errorf("should return nil error when br unavailable, got: %v", err)
@@ -32,9 +33,8 @@ func TestBrCreateWhenBrUnavailable(t *testing.T) {
 }
 
 func TestBrCloseWhenBrUnavailable(t *testing.T) {
-	if Available("br") {
-		t.Skip("br is available; this test covers the missing-br path")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	err := BrClose("test-id", "reason", "/tmp")
 	if err != nil {
 		t.Errorf("should return nil error when br unavailable, got: %v", err)
@@ -42,9 +42,8 @@ func TestBrCloseWhenBrUnavailable(t *testing.T) {
 }
 
 func TestGateCheckWhenGateUnavailable(t *testing.T) {
-	if Available("gate") {
-		t.Skip("gate is available; this test covers the missing-gate path")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	result, err := GateCheck("/tmp", "test")
 	if err != nil {
 		t.Errorf("should return nil error when gate unavailable, got: %v", err)
@@ -70,9 +69,8 @@ func TestBrCreateWhenBrAvailable(t *testing.T) {
 // --- bv graceful degradation tests ---
 
 func TestBvSearchWhenBvUnavailable(t *testing.T) {
-	if Available("bv") {
-		t.Skip("bv is available; this test covers the missing-bv path")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	result, err := BvSearch("test query", "/tmp")
 	if err != nil {
 		t.Errorf("should return nil error when bv unavailable, got: %v", err)
@@ -93,9 +91,8 @@ func TestBvSearchEmptyQuery(t *testing.T) {
 }
 
 func TestBvRelatedWhenBvUnavailable(t *testing.T) {
-	if Available("bv") {
-		t.Skip("bv is available; this test covers the missing-bv path")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	result, err := BvRelated("test-bead", "/tmp")
 	if err != nil {
 		t.Errorf("should return nil error when bv unavailable, got: %v", err)
@@ -116,9 +113,8 @@ func TestBvRelatedEmptyBead(t *testing.T) {
 }
 
 func TestBvPlanWhenBvUnavailable(t *testing.T) {
-	if Available("bv") {
-		t.Skip("bv is available; this test covers the missing-bv path")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	result, err := BvPlan("/tmp")
 	if err != nil {
 		t.Errorf("should return nil error when bv unavailable, got: %v", err)
@@ -130,10 +126,25 @@ func TestBvPlanWhenBvUnavailable(t *testing.T) {
 
 // When bv IS available, test real calls against the beads root.
 func TestBvSearchWhenBvAvailable(t *testing.T) {
-	if !Available("bv") {
-		t.Skip("bv not available")
-	}
-	result, err := BvSearch("test", "/home/polis/projects")
+	testutil.SandboxPATH(t, map[string]string{
+		"bv": `
+case "$1" in
+  --robot-search)
+    printf '%s\n' '{"results":[{"issue_id":"projects-i01","score":0.85,"title":"Add JWT auth"}]}'
+    ;;
+  --robot-related)
+    printf '%s\n' '{"target_bead_id":"projects-i01","target_title":"Wire bv into work","concurrent":[{"bead_id":"projects-a11","title":"Context budget handoff","status":"open","relation_type":"concurrent","relevance":82,"reason":"Touches same context flow"}],"total_related":1}'
+    ;;
+  --robot-plan)
+    printf '%s\n' '{"plan":{"tracks":[{"track_id":"A","items":[{"id":"projects-i01","title":"Wire bv into work","priority":0,"status":"open","unblocks":["projects-i02"]}],"reason":"Critical path"}],"total_actionable":1,"total_blocked":0,"summary":{"highest_impact":"projects-i01","impact_reason":"Unblocks downstream work","unblocks_count":1}}}'
+    ;;
+  *)
+    exit 1
+    ;;
+esac`,
+	})
+
+	result, err := BvSearch("test", t.TempDir())
 	if err != nil {
 		t.Fatalf("bv search should not error: %v", err)
 	}
@@ -146,10 +157,25 @@ func TestBvSearchWhenBvAvailable(t *testing.T) {
 }
 
 func TestBvRelatedWhenBvAvailable(t *testing.T) {
-	if !Available("bv") {
-		t.Skip("bv not available")
-	}
-	result, err := BvRelated("projects-i01", "/home/polis/projects")
+	testutil.SandboxPATH(t, map[string]string{
+		"bv": `
+case "$1" in
+  --robot-search)
+    printf '%s\n' '{"results":[{"issue_id":"projects-i01","score":0.85,"title":"Add JWT auth"}]}'
+    ;;
+  --robot-related)
+    printf '%s\n' '{"target_bead_id":"projects-i01","target_title":"Wire bv into work","concurrent":[{"bead_id":"projects-a11","title":"Context budget handoff","status":"open","relation_type":"concurrent","relevance":82,"reason":"Touches same context flow"}],"total_related":1}'
+    ;;
+  --robot-plan)
+    printf '%s\n' '{"plan":{"tracks":[{"track_id":"A","items":[{"id":"projects-i01","title":"Wire bv into work","priority":0,"status":"open","unblocks":["projects-i02"]}],"reason":"Critical path"}],"total_actionable":1,"total_blocked":0,"summary":{"highest_impact":"projects-i01","impact_reason":"Unblocks downstream work","unblocks_count":1}}}'
+    ;;
+  *)
+    exit 1
+    ;;
+esac`,
+	})
+
+	result, err := BvRelated("projects-i01", t.TempDir())
 	if err != nil {
 		t.Fatalf("bv related should not error: %v", err)
 	}
@@ -162,10 +188,25 @@ func TestBvRelatedWhenBvAvailable(t *testing.T) {
 }
 
 func TestBvPlanWhenBvAvailable(t *testing.T) {
-	if !Available("bv") {
-		t.Skip("bv not available")
-	}
-	result, err := BvPlan("/home/polis/projects")
+	testutil.SandboxPATH(t, map[string]string{
+		"bv": `
+case "$1" in
+  --robot-search)
+    printf '%s\n' '{"results":[{"issue_id":"projects-i01","score":0.85,"title":"Add JWT auth"}]}'
+    ;;
+  --robot-related)
+    printf '%s\n' '{"target_bead_id":"projects-i01","target_title":"Wire bv into work","concurrent":[{"bead_id":"projects-a11","title":"Context budget handoff","status":"open","relation_type":"concurrent","relevance":82,"reason":"Touches same context flow"}],"total_related":1}'
+    ;;
+  --robot-plan)
+    printf '%s\n' '{"plan":{"tracks":[{"track_id":"A","items":[{"id":"projects-i01","title":"Wire bv into work","priority":0,"status":"open","unblocks":["projects-i02"]}],"reason":"Critical path"}],"total_actionable":1,"total_blocked":0,"summary":{"highest_impact":"projects-i01","impact_reason":"Unblocks downstream work","unblocks_count":1}}}'
+    ;;
+  *)
+    exit 1
+    ;;
+esac`,
+	})
+
+	result, err := BvPlan(t.TempDir())
 	if err != nil {
 		t.Fatalf("bv plan should not error: %v", err)
 	}
@@ -180,27 +221,24 @@ func TestBvPlanWhenBvAvailable(t *testing.T) {
 // --- Relay + agent state degradation tests ---
 
 func TestBrAgentStateWhenBrUnavailable(t *testing.T) {
-	if Available("br") {
-		t.Skip("br is available")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	if err := BrAgentState("test-agent", "working"); err != nil {
 		t.Errorf("should return nil when br unavailable, got: %v", err)
 	}
 }
 
 func TestRelayHeartbeatWhenRelayUnavailable(t *testing.T) {
-	if Available("relay") {
-		t.Skip("relay is available")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	if err := RelayHeartbeat("test-agent"); err != nil {
 		t.Errorf("should return nil when relay unavailable, got: %v", err)
 	}
 }
 
 func TestRelaySendWhenRelayUnavailable(t *testing.T) {
-	if Available("relay") {
-		t.Skip("relay is available")
-	}
+	testutil.SandboxPATH(t, nil)
+
 	if err := RelaySend("zeus", "athena", "test", "thread-1"); err != nil {
 		t.Errorf("should return nil when relay unavailable, got: %v", err)
 	}

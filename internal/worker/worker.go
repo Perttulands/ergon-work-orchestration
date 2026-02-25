@@ -3,6 +3,7 @@ package worker
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -61,8 +62,8 @@ func Spawn(cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("launch claude: %w", err)
 	}
 
-	// 4. Wait for claude to be ready
-	if err := waitForReady(cfg.SessionName, 30*time.Second); err != nil {
+	// 4. Wait for claude to be ready (60s allows for trust dialog + slow startup)
+	if err := waitForReady(cfg.SessionName, 60*time.Second); err != nil {
 		killSession(cfg.SessionName)
 		return nil, fmt.Errorf("wait for ready: %w", err)
 	}
@@ -138,14 +139,47 @@ func sendKeys(session, keys string) error {
 	return nil
 }
 
-func sendPrompt(session, prompt string) error {
-	// For multi-line prompts, write to a temp approach: send as single block
-	// tmux send-keys handles this, but we need to escape special chars
-	cmd := exec.Command("tmux", "send-keys", "-t", session, prompt, "Enter")
+// sendKeysRaw sends key(s) to a tmux session without appending Enter.
+func sendKeysRaw(session string, keys ...string) error {
+	args := append([]string{"send-keys", "-t", session}, keys...)
+	cmd := exec.Command("tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
 	return nil
+}
+
+func sendPrompt(session, prompt string) error {
+	// Write prompt to a temp file and use tmux load-buffer + paste-buffer.
+	// This is safer than send-keys for multi-line / long prompts because
+	// tmux send-keys interprets special characters and can corrupt text.
+	f, err := os.CreateTemp("", "work-prompt-*.txt")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := f.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := f.WriteString(prompt); err != nil {
+		f.Close()
+		return fmt.Errorf("write prompt: %w", err)
+	}
+	f.Close()
+
+	// Load into tmux buffer
+	loadCmd := exec.Command("tmux", "load-buffer", tmpPath)
+	if out, err := loadCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("load-buffer: %s: %s", err, out)
+	}
+
+	// Paste into the target pane
+	pasteCmd := exec.Command("tmux", "paste-buffer", "-t", session)
+	if out, err := pasteCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("paste-buffer: %s: %s", err, out)
+	}
+
+	// Send Enter to submit the prompt
+	return sendKeysRaw(session, "Enter")
 }
 
 func capturePane(session string) (string, error) {
@@ -159,15 +193,32 @@ func capturePane(session string) (string, error) {
 
 func waitForReady(session string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	trustDismissed := false
 	for time.Now().Before(deadline) {
 		output, err := capturePane(session)
 		if err != nil {
 			return fmt.Errorf("wait for ready: %w", err)
 		}
-		// Claude Code shows a prompt character when ready
-		if strings.Contains(output, "❯") || strings.Contains(output, ">") {
+
+		// Claude Code shows a welcome banner ("Claude Code v") once fully
+		// initialised and ready to accept input.  This is the authoritative
+		// ready signal — it only appears after the workspace trust dialog
+		// (if any) has been resolved.
+		if strings.Contains(output, "Claude Code v") {
 			return nil
 		}
+
+		// If the workspace trust dialog is showing, auto-accept it so
+		// Claude can finish starting.  The trust dialog contains
+		// "trust this folder" and a "❯ 1." selector.  Sending Enter
+		// picks the default "Yes, I trust this folder" option.
+		if !trustDismissed && strings.Contains(output, "trust this folder") {
+			_ = sendKeysRaw(session, "Enter")
+			trustDismissed = true
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("timed out waiting for claude to start (session: %s)", session)
