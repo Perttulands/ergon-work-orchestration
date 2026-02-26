@@ -85,6 +85,12 @@ SQLite index for fast queries.
 - **Concurrency:** multiple workers tracked simultaneously
 - **Retention:** configurable, default 30 days for traces
 
+## Dependencies
+
+Requires: `tmux` -- workers are spawned as tmux sessions.
+Optional: `gate` -- if on PATH, runs quality checks on completed work.
+Optional: `relay` -- publishes run events to other agents.
+
 ## What It Does NOT Do
 
 - Quality gating (that's `gate`)
