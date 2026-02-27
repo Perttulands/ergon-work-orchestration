@@ -67,6 +67,107 @@ func TestContextCommandWithCitizenFile(t *testing.T) {
 	}
 }
 
+func TestContextCommandWithBeadID(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"git": `echo "abc1234 initial commit"`,
+	})
+
+	workDir := t.TempDir()
+	citizenDir := filepath.Join(workDir, "citizens")
+	os.MkdirAll(citizenDir, 0o755)
+	os.WriteFile(filepath.Join(citizenDir, "zeus.md"),
+		[]byte("Zeus has deep experience with auth systems."), 0o644)
+
+	// Point HOME so ~/.work resolves to our temp dir
+	homeDir := filepath.Dir(workDir)
+	dotWork := filepath.Join(homeDir, ".work")
+	os.Symlink(workDir, dotWork)
+	t.Cleanup(func() { os.Remove(dotWork) })
+	t.Setenv("HOME", homeDir)
+
+	repoDir := t.TempDir()
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"context", "pol-test-123",
+		"--citizen", "zeus",
+		"--repo", repoDir,
+		"--task", "add authentication",
+	})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("context with bead ID failed: %v", err)
+	}
+
+	out := buf.String()
+	if out == "" {
+		t.Fatal("expected non-empty output from context command")
+	}
+
+	// Verify output contains citizen experience
+	if !strings.Contains(out, "zeus") || !strings.Contains(out, "auth") {
+		t.Error("output should contain citizen experience mentioning zeus and auth")
+	}
+}
+
+func TestContextCommandOutputStructure(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"git": `echo "deadbeef some commit message"`,
+	})
+
+	workDir := t.TempDir()
+	citizenDir := filepath.Join(workDir, "citizens")
+	os.MkdirAll(citizenDir, 0o755)
+	os.WriteFile(filepath.Join(citizenDir, "mercury.md"),
+		[]byte("Experienced with CLI tools and testing."), 0o644)
+
+	homeDir := filepath.Dir(workDir)
+	dotWork := filepath.Join(homeDir, ".work")
+	os.Symlink(workDir, dotWork)
+	t.Cleanup(func() { os.Remove(dotWork) })
+	t.Setenv("HOME", homeDir)
+
+	repoDir := t.TempDir()
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"context", "pol-test-456",
+		"--citizen", "mercury",
+		"--repo", repoDir,
+	})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("context failed: %v", err)
+	}
+
+	out := buf.String()
+	// With git mock and citizen file, we should get structured markdown sections
+	if !strings.Contains(out, "Git History") && !strings.Contains(out, "Experience") {
+		t.Error("output should contain markdown section headers (Git History or Experience)")
+	}
+}
+
+func TestContextCommandNoArgs(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{"context", "--repo", t.TempDir()})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("context with no bead ID failed: %v", err)
+	}
+	// Should still produce output (fresh start message or gathered context)
+	if buf.Len() == 0 {
+		t.Error("expected output even without bead ID")
+	}
+}
+
 // --- history command with seeded index ---
 
 func TestHistoryWithSeededIndex(t *testing.T) {
