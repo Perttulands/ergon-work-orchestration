@@ -37,6 +37,7 @@ type Config struct {
 // Result holds the assembled context.
 type Result struct {
 	PastBeads         []BeadResult
+	GitLog            string // recent git log from repo
 	CitizenExperience string
 	LearningPatterns  string
 	LearningInsights  string // formatted output from loop query
@@ -101,11 +102,22 @@ func Gather(cfg Config) (*Result, error) {
 		}
 	}
 
-	// 5. Query past beads via br search
+	// 5. Query past beads via br search, fall back to br list --status closed
 	beads, err := queryBeads(cfg)
-	if err == nil && len(beads) > 0 {
+	if err != nil || len(beads) == 0 {
+		beads, _ = listClosedBeads(cfg.Repo)
+	}
+	if len(beads) > 0 {
 		r.PastBeads = beads
 		sections = append(sections, formatBeads(beads))
+	}
+
+	// 5b. Git log for recent repo history
+	if cfg.Repo != "" {
+		if gitLog, err := queryGitLog(cfg.Repo); err == nil && gitLog != "" {
+			r.GitLog = gitLog
+			sections = append(sections, formatGitLog(gitLog))
+		}
 	}
 
 	// 6. Read citizen experience file
@@ -176,6 +188,52 @@ func queryBeads(cfg Config) ([]BeadResult, error) {
 	}
 
 	return beads, nil
+}
+
+// listClosedBeads queries br for all recently closed beads.
+func listClosedBeads(repo string) ([]BeadResult, error) {
+	if _, err := exec.LookPath("br"); err != nil {
+		return nil, fmt.Errorf("br not on PATH")
+	}
+
+	cmd := exec.Command("br", "list", "--status", "closed", "--json")
+	if repo != "" {
+		cmd.Dir = repo
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("br list: %w", err)
+	}
+
+	var beads []BeadResult
+	if err := json.Unmarshal(out, &beads); err != nil {
+		return nil, fmt.Errorf("parse br list output: %w", err)
+	}
+
+	// Limit to most recent 10
+	if len(beads) > 10 {
+		beads = beads[:10]
+	}
+	return beads, nil
+}
+
+// queryGitLog returns recent git log output for repo context.
+func queryGitLog(repo string) (string, error) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return "", fmt.Errorf("git not on PATH")
+	}
+
+	cmd := exec.Command("git", "log", "--oneline", "-20")
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git log: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func formatGitLog(log string) string {
+	return fmt.Sprintf("## Recent Git History\n\n```\n%s\n```", log)
 }
 
 // readCitizenExperience reads the citizen's experience file.

@@ -404,6 +404,129 @@ func TestFormatLearningInsightsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestGatherWithMockBr(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"br": `
+case "$1" in
+  list)
+    printf '%s\n' '[{"id":"pol-abc","title":"Add auth flow","status":"closed","priority":1,"created_at":"2026-02-01","updated_at":"2026-02-02"},{"id":"pol-def","title":"Fix flaky CI","status":"closed","priority":2,"created_at":"2026-02-03","updated_at":"2026-02-04"}]'
+    ;;
+  search)
+    printf '%s\n' '[{"id":"pol-abc","title":"Add auth flow","status":"closed","priority":1,"created_at":"2026-02-01","updated_at":"2026-02-02"}]'
+    ;;
+  *)
+    exit 1
+    ;;
+esac`,
+	})
+
+	cfg := Config{
+		Task:      "implement auth",
+		Repo:      t.TempDir(),
+		WorkDir:   t.TempDir(),
+		BeadsRoot: t.TempDir(),
+	}
+	result, err := Gather(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.PastBeads) == 0 {
+		t.Fatal("expected past beads from mock br")
+	}
+	if result.PastBeads[0].ID != "pol-abc" {
+		t.Errorf("first bead ID = %q, want pol-abc", result.PastBeads[0].ID)
+	}
+	if !strings.Contains(result.Markdown, "## Past Work") {
+		t.Error("markdown should contain Past Work section")
+	}
+	if !strings.Contains(result.Markdown, "Add auth flow") {
+		t.Error("markdown should contain bead title")
+	}
+}
+
+func TestGatherFallsBackToBrList(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"br": `
+case "$1" in
+  list)
+    printf '%s\n' '[{"id":"pol-xyz","title":"Closed task","status":"closed","priority":0,"created_at":"2026-01-01","updated_at":"2026-01-02"}]'
+    ;;
+  search)
+    exit 1
+    ;;
+  *)
+    exit 1
+    ;;
+esac`,
+	})
+
+	cfg := Config{
+		Task:      "something",
+		Repo:      t.TempDir(),
+		WorkDir:   t.TempDir(),
+		BeadsRoot: t.TempDir(),
+	}
+	result, err := Gather(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.PastBeads) != 1 {
+		t.Fatalf("expected 1 bead from br list fallback, got %d", len(result.PastBeads))
+	}
+	if result.PastBeads[0].ID != "pol-xyz" {
+		t.Errorf("bead ID = %q, want pol-xyz", result.PastBeads[0].ID)
+	}
+}
+
+func TestQueryGitLog(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"git": `printf 'abc1234 Add auth\ndef5678 Fix tests\n'`,
+	})
+
+	got, err := queryGitLog(t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(got, "abc1234") {
+		t.Error("should contain first commit")
+	}
+	if !strings.Contains(got, "Fix tests") {
+		t.Error("should contain second commit message")
+	}
+}
+
+func TestFormatGitLog(t *testing.T) {
+	result := formatGitLog("abc1234 Add auth\ndef5678 Fix tests")
+	if !strings.Contains(result, "## Recent Git History") {
+		t.Error("missing header")
+	}
+	if !strings.Contains(result, "abc1234") {
+		t.Error("missing commit hash")
+	}
+}
+
+func TestGatherIncludesGitLog(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"git": `printf 'abc1234 Initial commit\n'`,
+	})
+
+	cfg := Config{
+		Repo:      t.TempDir(),
+		WorkDir:   t.TempDir(),
+		BeadsRoot: t.TempDir(),
+	}
+	result, err := Gather(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.GitLog == "" {
+		t.Error("expected git log in result")
+	}
+	if !strings.Contains(result.Markdown, "## Recent Git History") {
+		t.Error("markdown should contain git history section")
+	}
+}
+
 func TestGatherWithoutLearningLoop(t *testing.T) {
 	t.Setenv("LEARNING_LOOP_DIR", t.TempDir())
 
