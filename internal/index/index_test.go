@@ -138,6 +138,127 @@ func TestRecentDefault(t *testing.T) {
 	_ = runs
 }
 
+func TestRebuildFromJSONL(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create two trace files without indexing them
+	tr1, err := trace.Open(workDir, "rebuild-aaa", "zeus", "add auth")
+	if err != nil {
+		t.Fatalf("open trace 1: %v", err)
+	}
+	tr1.EmitToolCall("bash", "go build", 100)
+	tr1.Close("success", nil)
+
+	tr2, err := trace.Open(workDir, "rebuild-bbb", "ares", "fix bug")
+	if err != nil {
+		t.Fatalf("open trace 2: %v", err)
+	}
+	tr2.EmitError("compile failed")
+	tr2.Close("error", fmt.Errorf("compile failed"))
+
+	// Open index — should auto-rebuild from JSONL
+	db, err := Open(workDir)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer db.Close()
+
+	// Query by bead — should find both
+	runs1, err := db.ByBead("rebuild-aaa")
+	if err != nil {
+		t.Fatalf("by bead aaa: %v", err)
+	}
+	if len(runs1) != 1 {
+		t.Fatalf("expected 1 run for rebuild-aaa, got %d", len(runs1))
+	}
+	if runs1[0].Agent != "zeus" {
+		t.Errorf("agent=%s, want zeus", runs1[0].Agent)
+	}
+	if runs1[0].Task != "add auth" {
+		t.Errorf("task=%s, want add auth", runs1[0].Task)
+	}
+	if runs1[0].Outcome != "success" {
+		t.Errorf("outcome=%s, want success", runs1[0].Outcome)
+	}
+
+	runs2, err := db.ByBead("rebuild-bbb")
+	if err != nil {
+		t.Fatalf("by bead bbb: %v", err)
+	}
+	if len(runs2) != 1 {
+		t.Fatalf("expected 1 run for rebuild-bbb, got %d", len(runs2))
+	}
+	if runs2[0].Agent != "ares" {
+		t.Errorf("agent=%s, want ares", runs2[0].Agent)
+	}
+	if runs2[0].Outcome != "error" {
+		t.Errorf("outcome=%s, want error", runs2[0].Outcome)
+	}
+
+	// Recent should return both, newest first
+	recent, err := db.Recent(10)
+	if err != nil {
+		t.Fatalf("recent: %v", err)
+	}
+	if len(recent) != 2 {
+		t.Fatalf("expected 2 recent runs, got %d", len(recent))
+	}
+}
+
+func TestRebuildExplicit(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create a trace file
+	tr, err := trace.Open(workDir, "explicit-rebuild", "mercury", "refactor")
+	if err != nil {
+		t.Fatalf("open trace: %v", err)
+	}
+	tr.Close("success", nil)
+
+	// Open index and manually record something else first
+	db, err := Open(workDir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	// Rebuild explicitly returns count
+	count, err := db.Rebuild(workDir)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if count < 1 {
+		t.Errorf("expected at least 1 rebuilt trace, got %d", count)
+	}
+
+	runs, err := db.ByBead("explicit-rebuild")
+	if err != nil {
+		t.Fatalf("by bead: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(runs))
+	}
+}
+
+func TestRebuildNoTracesDir(t *testing.T) {
+	workDir := t.TempDir()
+
+	db, err := Open(workDir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	// Rebuild on empty dir should return 0
+	count, err := db.Rebuild(workDir)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 rebuilt, got %d", count)
+	}
+}
+
 func TestRecordUpsert(t *testing.T) {
 	db, err := Open(t.TempDir())
 	if err != nil {

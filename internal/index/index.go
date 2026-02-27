@@ -49,7 +49,14 @@ func Open(workDir string) (*DB, error) {
 		return nil, fmt.Errorf("migrate index: %w", err)
 	}
 
-	return &DB{db: db}, nil
+	d := &DB{db: db}
+
+	// Auto-rebuild from JSONL traces if the index is empty
+	if d.isEmpty() {
+		d.Rebuild(workDir)
+	}
+
+	return d, nil
 }
 
 func migrate(db *sql.DB) error {
@@ -123,6 +130,99 @@ func (d *DB) ByBead(beadID string) ([]RunRecord, error) {
 	defer rows.Close()
 
 	return scanRuns(rows)
+}
+
+// Rebuild scans JSONL trace files under workDir/traces/ and populates the index.
+// Called automatically on Open when the DB is empty.
+func (d *DB) Rebuild(workDir string) (int, error) {
+	tracesDir := filepath.Join(workDir, "traces")
+	if _, err := os.Stat(tracesDir); os.IsNotExist(err) {
+		return 0, nil
+	}
+
+	var count int
+	err := filepath.Walk(tracesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // skip errors
+		}
+		if info.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+
+		meta, err := metadataFromTrace(path)
+		if err != nil {
+			return nil // skip malformed traces
+		}
+
+		if err := d.Record(meta); err != nil {
+			return nil // skip record errors
+		}
+		count++
+		return nil
+	})
+	if err != nil {
+		return count, fmt.Errorf("walk traces: %w", err)
+	}
+	return count, nil
+}
+
+// metadataFromTrace extracts run metadata from a JSONL trace file by reading
+// the begin and end events.
+func metadataFromTrace(path string) (trace.Metadata, error) {
+	events, err := trace.ReadTrace(path)
+	if err != nil {
+		return trace.Metadata{}, fmt.Errorf("read trace %s: %w", path, err)
+	}
+	if len(events) == 0 {
+		return trace.Metadata{}, fmt.Errorf("empty trace: %s", path)
+	}
+
+	// Find begin and end events
+	var begin, end *trace.Event
+	for i := range events {
+		switch events[i].EventType {
+		case "begin":
+			begin = &events[i]
+		case "end":
+			end = &events[i]
+		}
+	}
+	if begin == nil {
+		return trace.Metadata{}, fmt.Errorf("no begin event in %s", path)
+	}
+
+	meta := trace.Metadata{
+		BeadID:   begin.Bead,
+		Agent:    begin.Agent,
+		Task:     begin.Task,
+		FilePath: path,
+	}
+
+	if t, err := time.Parse(time.RFC3339, begin.Timestamp); err == nil {
+		meta.StartTime = t
+	}
+
+	if end != nil {
+		meta.Outcome = end.Outcome
+		if end.DurationS != nil {
+			meta.DurationS = *end.DurationS
+		}
+		if t, err := time.Parse(time.RFC3339, end.Timestamp); err == nil {
+			meta.EndTime = t
+		}
+	} else {
+		meta.Outcome = "incomplete"
+		meta.EndTime = meta.StartTime
+	}
+
+	return meta, nil
+}
+
+// isEmpty checks if the runs table has any rows.
+func (d *DB) isEmpty() bool {
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM runs").Scan(&count)
+	return err != nil || count == 0
 }
 
 // Close closes the database.
