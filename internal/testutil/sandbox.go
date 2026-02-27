@@ -5,8 +5,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"testing"
 )
+
+// TB is the subset of testing.TB used by test helpers in this package.
+// Both *testing.T and *testing.B satisfy it without importing "testing".
+type TB interface {
+	Helper()
+	TempDir() string
+	Fatalf(format string, args ...any)
+	Setenv(key, value string)
+}
 
 // SandboxPATH restricts PATH to a temp directory containing only the named
 // tool scripts. Each entry in tools maps a binary name to a shell script body;
@@ -18,7 +26,7 @@ import (
 //
 // Basic system tools (sh, bash, env, cat, etc.) are always symlinked from
 // the real PATH so that shell scripts and subprocesses work.
-func SandboxPATH(t *testing.T, tools map[string]string) string {
+func SandboxPATH(t TB, tools map[string]string) string {
 	t.Helper()
 
 	binDir := t.TempDir()
