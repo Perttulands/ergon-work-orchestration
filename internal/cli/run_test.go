@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	workctx "polis/work/internal/context"
 	"polis/work/internal/ecosystem"
+	"polis/work/internal/testutil"
 
 	"github.com/spf13/cobra"
 )
@@ -167,3 +171,129 @@ func TestBuildRunRecordError(t *testing.T) {
 		t.Errorf("exit_code = %d, want 1", rec.ExitCode)
 	}
 }
+
+func TestRunTaskOrchestration(t *testing.T) {
+	// Mock tmux that simulates the full worker lifecycle:
+	// - new-session: succeed
+	// - send-keys: succeed
+	// - capture-pane: return "Claude Code v1.0" banner + idle prompt (ready + done)
+	// - has-session: succeed on first call, fail on subsequent (session cleaned up)
+	// - kill-session: succeed
+	// - load-buffer / paste-buffer: succeed
+	tmuxScript := `
+case "$1" in
+  new-session)  exit 0 ;;
+  send-keys)    exit 0 ;;
+  capture-pane) printf "Welcome to Claude Code v1.0\nTask complete. All tests pass.\n❯\n" ; exit 0 ;;
+  has-session)  exit 1 ;;
+  kill-session) exit 0 ;;
+  load-buffer)  exit 0 ;;
+  paste-buffer) exit 0 ;;
+  *)            exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux": tmuxScript,
+		"br":   `echo "test-bead-001"`,
+		"gate": `echo '{"pass":true,"score":0.95}'`,
+		"git":  `echo "abc1234 initial commit"`,
+	})
+
+	// Set up work directory
+	workDir := t.TempDir()
+	homeDir := filepath.Dir(workDir)
+	dotWork := filepath.Join(homeDir, ".work")
+	os.Symlink(workDir, dotWork)
+	t.Cleanup(func() { os.Remove(dotWork) })
+	t.Setenv("HOME", homeDir)
+
+	repoDir := t.TempDir()
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"run", "add unit tests",
+		"--repo", repoDir,
+		"--citizen", "test-worker",
+		"--deadline", "10s",
+	})
+
+	err := root.Execute()
+	out := buf.String()
+
+	// runTask returns spawnErr; with our mock tmux it should succeed
+	if err != nil {
+		t.Fatalf("run failed: %v\noutput: %s", err, out)
+	}
+
+	// Verify key orchestration outputs
+	if !strings.Contains(out, "Starting: add unit tests") {
+		t.Error("should print task name")
+	}
+	if !strings.Contains(out, "Citizen: test-worker") {
+		t.Error("should print citizen name")
+	}
+	if !strings.Contains(out, "Spawning worker") {
+		t.Error("should mention spawning worker")
+	}
+	if !strings.Contains(out, "Done:") {
+		t.Error("should print Done: on completion")
+	}
+}
+
+func TestRunTaskBeadFreeMode(t *testing.T) {
+	// Test orchestration when br is not on PATH (bead-free mode).
+	// tmux mock still needed for worker spawn.
+	tmuxScript := `
+case "$1" in
+  new-session)  exit 0 ;;
+  send-keys)    exit 0 ;;
+  capture-pane) printf "Claude Code v1.0\nDone.\n❯\n" ; exit 0 ;;
+  has-session)  exit 1 ;;
+  kill-session) exit 0 ;;
+  load-buffer)  exit 0 ;;
+  paste-buffer) exit 0 ;;
+  *)            exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux": tmuxScript,
+		"git":  `echo "deadbeef commit msg"`,
+	})
+
+	workDir := t.TempDir()
+	homeDir := filepath.Dir(workDir)
+	dotWork := filepath.Join(homeDir, ".work")
+	os.Symlink(workDir, dotWork)
+	t.Cleanup(func() { os.Remove(dotWork) })
+	t.Setenv("HOME", homeDir)
+
+	repoDir := t.TempDir()
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"run", "fix bug",
+		"--repo", repoDir,
+		"--citizen", "solo-worker",
+		"--deadline", "5s",
+	})
+
+	err := root.Execute()
+	out := buf.String()
+
+	if err != nil {
+		t.Fatalf("run in bead-free mode failed: %v\noutput: %s", err, out)
+	}
+
+	// Should warn about missing tools
+	if !strings.Contains(out, "bead-free mode") {
+		t.Error("should warn about bead-free mode when br is missing")
+	}
+	if !strings.Contains(out, "Done:") {
+		t.Error("should complete even in bead-free mode")
+	}
+}
+
