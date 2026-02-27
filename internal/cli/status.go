@@ -64,8 +64,14 @@ func getActiveSessions() ([]activeSession, error) {
 		return nil, fmt.Errorf("list tmux sessions: %w", err)
 	}
 
+	return parseTmuxSessions(string(out)), nil
+}
+
+// parseTmuxSessions parses tmux list-sessions output into work sessions.
+// Only sessions with names starting with "work-" are returned.
+func parseTmuxSessions(output string) []activeSession {
 	var sessions []activeSession
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		if line == "" {
 			continue
 		}
@@ -80,5 +86,5 @@ func getActiveSessions() ([]activeSession, error) {
 		}
 		sessions = append(sessions, activeSession{Name: name, Created: created})
 	}
-	return sessions, nil
+	return sessions
 }
