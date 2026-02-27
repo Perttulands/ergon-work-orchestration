@@ -74,16 +74,24 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	cmd.Printf("Starting: %s\n", task)
 	cmd.Printf("  Citizen: %s | Repo: %s | Deadline: %s\n", citizen, repo, deadline)
 
+	// Pre-flight: check tool availability and warn about degradation
+	degradation := checkTools()
+	for _, d := range degradation {
+		if d.Warning != "" {
+			cmd.Printf("  Warning: %s\n", d.Warning)
+		}
+	}
+
 	// Step 1: Create bead
 	beadID := "work-" + randomID()
 	bead, err := ecosystem.BrCreate(task, repo)
 	if err != nil {
-		cmd.Printf("  Warning: br create failed: %v (continuing without bead tracking)\n", err)
+		cmd.Printf("  Warning: br create failed: %v (continuing in bead-free mode)\n", err)
 	} else if bead != nil {
 		beadID = bead.ID
 		cmd.Printf("  Bead: %s\n", beadID)
 	} else {
-		cmd.Printf("  Note: br not available, using generated ID: %s\n", beadID)
+		cmd.Printf("  Warning: br not on PATH — operating in bead-free mode (ID: %s)\n", beadID)
 	}
 
 	// Step 1b: Agent state → working + relay heartbeat
@@ -142,6 +150,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 
 	// Step 6: Gate check
 	var gateResult *ecosystem.GateResult
+	gateSkipped := false
 	if spawnErr == nil {
 		gate, gateErr := ecosystem.GateCheck(repo, citizen)
 		if gateErr != nil {
@@ -164,7 +173,11 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 				outcome = "gate_fail"
 			}
 		} else {
-			cmd.Printf("  Note: gate not available, skipping quality check\n")
+			gateSkipped = true
+			cmd.Printf("  Warning: gate not on PATH — result is unverified\n")
+			if tr != nil {
+				tr.EmitError("gate_skipped: result is unverified")
+			}
 		}
 	}
 
@@ -252,7 +265,11 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		cmd.Printf("  Warning: br agent state idle: %v\n", err)
 	}
 
-	cmd.Printf("Done: %s [%s]\n", beadID, outcome)
+	if gateSkipped {
+		cmd.Printf("Done: %s [%s] (unverified)\n", beadID, outcome)
+	} else {
+		cmd.Printf("Done: %s [%s]\n", beadID, outcome)
+	}
 	return spawnErr
 }
 
@@ -286,6 +303,52 @@ func randomID() string {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+// toolDegradation describes what happens when an optional tool is missing.
+type toolDegradation struct {
+	Name    string
+	Present bool
+	Warning string // empty if tool is present or degrades silently
+	Mode    string // "normal", "bead-free", "unverified", "silent-skip"
+}
+
+// checkTools checks which optional tools are available and returns degradation info.
+func checkTools() []toolDegradation {
+	var report []toolDegradation
+
+	if !ecosystem.Available("gate") {
+		report = append(report, toolDegradation{
+			Name:    "gate",
+			Present: false,
+			Warning: "gate not on PATH — results will be unverified",
+			Mode:    "unverified",
+		})
+	}
+	if !ecosystem.Available("br") {
+		report = append(report, toolDegradation{
+			Name:    "br",
+			Present: false,
+			Warning: "br not on PATH — operating in bead-free mode",
+			Mode:    "bead-free",
+		})
+	}
+	if !ecosystem.Available("relay") {
+		report = append(report, toolDegradation{
+			Name:    "relay",
+			Present: false,
+			Mode:    "silent-skip",
+		})
+	}
+	if !ecosystem.Available("loop") {
+		report = append(report, toolDegradation{
+			Name:    "loop",
+			Present: false,
+			Mode:    "silent-skip",
+		})
+	}
+
+	return report
 }
 
 // buildRunRecord maps work run outcome data to the format expected by feedback-collector.sh.
