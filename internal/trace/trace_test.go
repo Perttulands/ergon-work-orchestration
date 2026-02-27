@@ -251,6 +251,103 @@ func TestReadTrace(t *testing.T) {
 	}
 }
 
+// TestBeginTwoEventsEnd validates the core lifecycle per spec:
+// begin + 2 events + end produces correct JSONL records.
+func TestBeginTwoEventsEnd(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "lifecycle-test", "mercury", "implement feature")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// Event 1: tool call
+	if err := tr.EmitToolCall("bash", "go build ./...", 200); err != nil {
+		t.Fatalf("emit tool call: %v", err)
+	}
+	// Event 2: file write
+	if err := tr.EmitFileWrite("internal/auth.go", 30); err != nil {
+		t.Fatalf("emit file write: %v", err)
+	}
+	if err := tr.Close("success", nil); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Read back and verify
+	events, err := ReadTrace(tr.FilePath())
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("expected 4 JSONL records (begin + 2 events + end), got %d", len(events))
+	}
+
+	// Record 1: begin
+	if events[0].EventType != "begin" {
+		t.Errorf("record 0: event=%s, want begin", events[0].EventType)
+	}
+	if events[0].Bead != "lifecycle-test" {
+		t.Errorf("begin: bead=%s, want lifecycle-test", events[0].Bead)
+	}
+	if events[0].Agent != "mercury" {
+		t.Errorf("begin: agent=%s, want mercury", events[0].Agent)
+	}
+	if events[0].Task != "implement feature" {
+		t.Errorf("begin: task=%s, want implement feature", events[0].Task)
+	}
+	if events[0].Timestamp == "" {
+		t.Error("begin: timestamp should be set")
+	}
+
+	// Record 2: tool_call
+	if events[1].EventType != "tool_call" {
+		t.Errorf("record 1: event=%s, want tool_call", events[1].EventType)
+	}
+	if events[1].Cmd != "go build ./..." {
+		t.Errorf("tool_call: cmd=%s", events[1].Cmd)
+	}
+
+	// Record 3: file_write
+	if events[2].EventType != "file_write" {
+		t.Errorf("record 2: event=%s, want file_write", events[2].EventType)
+	}
+	if events[2].Path != "internal/auth.go" {
+		t.Errorf("file_write: path=%s", events[2].Path)
+	}
+
+	// Record 4: end
+	if events[3].EventType != "end" {
+		t.Errorf("record 3: event=%s, want end", events[3].EventType)
+	}
+	if events[3].Outcome != "success" {
+		t.Errorf("end: outcome=%s, want success", events[3].Outcome)
+	}
+	if events[3].DurationS == nil {
+		t.Error("end: duration_s should be set")
+	}
+
+	// Verify each line is valid JSON
+	data, err := os.ReadFile(tr.FilePath())
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 JSONL lines, got %d", len(lines))
+	}
+	for i, line := range lines {
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			t.Errorf("line %d is not valid JSON: %v", i, err)
+		}
+		if _, ok := raw["ts"]; !ok {
+			t.Errorf("line %d missing 'ts' field", i)
+		}
+		if _, ok := raw["event"]; !ok {
+			t.Errorf("line %d missing 'event' field", i)
+		}
+	}
+}
+
 func TestReadTraceNonExistent(t *testing.T) {
 	_, err := ReadTrace("/tmp/nonexistent-trace-file.jsonl")
 	if err == nil {
