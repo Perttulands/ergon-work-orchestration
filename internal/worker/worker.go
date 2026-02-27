@@ -191,6 +191,26 @@ func capturePane(session string) (string, error) {
 	return string(out), nil
 }
 
+// readyState describes what waitForReady detected in a pane capture.
+type readyState int
+
+const (
+	readyNotYet    readyState = iota // still loading
+	readyOK                          // Claude Code banner visible
+	readyNeedTrust                   // trust dialog visible — needs Enter
+)
+
+// detectReady inspects captured pane output and returns the ready state.
+func detectReady(output string) readyState {
+	if strings.Contains(output, "Claude Code v") {
+		return readyOK
+	}
+	if strings.Contains(output, "trust this folder") {
+		return readyNeedTrust
+	}
+	return readyNotYet
+}
+
 func waitForReady(session string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	trustDismissed := false
@@ -200,28 +220,33 @@ func waitForReady(session string, timeout time.Duration) error {
 			return fmt.Errorf("wait for ready: %w", err)
 		}
 
-		// Claude Code shows a welcome banner ("Claude Code v") once fully
-		// initialised and ready to accept input.  This is the authoritative
-		// ready signal — it only appears after the workspace trust dialog
-		// (if any) has been resolved.
-		if strings.Contains(output, "Claude Code v") {
+		switch detectReady(output) {
+		case readyOK:
 			return nil
-		}
-
-		// If the workspace trust dialog is showing, auto-accept it so
-		// Claude can finish starting.  The trust dialog contains
-		// "trust this folder" and a "❯ 1." selector.  Sending Enter
-		// picks the default "Yes, I trust this folder" option.
-		if !trustDismissed && strings.Contains(output, "trust this folder") {
-			_ = sendKeysRaw(session, "Enter")
-			trustDismissed = true
-			time.Sleep(1 * time.Second)
-			continue
+		case readyNeedTrust:
+			if !trustDismissed {
+				_ = sendKeysRaw(session, "Enter")
+				trustDismissed = true
+				time.Sleep(1 * time.Second)
+				continue
+			}
 		}
 
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("timed out waiting for claude to start (session: %s)", session)
+}
+
+// detectCompletion checks if pane output indicates the worker is done.
+// Returns true when the last line shows the idle prompt (❯) and no
+// tool activity is detected on the preceding line.
+func detectCompletion(output string) bool {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) <= 2 {
+		return false
+	}
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	return strings.HasPrefix(lastLine, "❯") && !isStillWorking(output)
 }
 
 func waitForCompletion(session string, maxWait time.Duration) string {
@@ -236,14 +261,8 @@ func waitForCompletion(session string, maxWait time.Duration) string {
 		}
 		lastOutput = output
 
-		// Detect completion: claude shows prompt again after finishing work
-		lines := strings.Split(strings.TrimSpace(output), "\n")
-		if len(lines) > 2 {
-			lastLine := strings.TrimSpace(lines[len(lines)-1])
-			// Claude shows ❯ when idle/waiting for input
-			if strings.HasPrefix(lastLine, "❯") && !isStillWorking(output) {
-				return output
-			}
+		if detectCompletion(output) {
+			return output
 		}
 
 		// Also check if session is gone
