@@ -129,3 +129,37 @@ func TestFormatCloseReasonWithError(t *testing.T) {
 		t.Errorf("should contain error: %s", result)
 	}
 }
+
+// TestFormatCloseReasonShortDuration exercises the seconds-only formatting
+// path (< 60s). This is the common case for fast tasks like lint-only runs.
+func TestFormatCloseReasonShortDuration(t *testing.T) {
+	cr := &CloseReason{Outcome: "success", DurationS: 45}
+	result := FormatCloseReason(cr)
+	if !strings.Contains(result, "45s") {
+		t.Errorf("should format short duration as seconds: %s", result)
+	}
+	// Must NOT contain "0m45s" — only "45s"
+	if strings.Contains(result, "m") {
+		t.Errorf("short duration should not show minutes: %s", result)
+	}
+}
+
+// TestFormatCloseReasonGateFail verifies the gate:fail formatting path.
+// This is how agents learn that quality checks didn't pass.
+func TestFormatCloseReasonGateFail(t *testing.T) {
+	pass := false
+	score := 0.30
+	cr := &CloseReason{
+		Outcome:   "gate_fail",
+		DurationS: 90,
+		GatePass:  &pass,
+		GateScore: &score,
+	}
+	result := FormatCloseReason(cr)
+	if !strings.Contains(result, "gate:fail(0.30)") {
+		t.Errorf("should contain gate:fail with score: %s", result)
+	}
+	if !strings.Contains(result, "1m30s") {
+		t.Errorf("should format duration: %s", result)
+	}
+}

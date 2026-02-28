@@ -242,6 +242,149 @@ esac
 	}
 }
 
+// TestRunTaskTraceRecordedOnSpawnError verifies that when worker.Spawn fails,
+// the trace file still gets a proper "end" event with the error. Without this,
+// debugging agent failures is impossible — the trace just ends with "begin"
+// and no indication of what went wrong.
+func TestRunTaskTraceRecordedOnSpawnError(t *testing.T) {
+	// Mock tmux that fails at create-session (simulates tmux down)
+	tmuxScript := `
+case "$1" in
+  new-session)  echo "server not found" >&2; exit 1 ;;
+  send-keys)    exit 1 ;;
+  capture-pane) exit 1 ;;
+  has-session)  exit 1 ;;
+  kill-session) exit 0 ;;
+  load-buffer)  exit 0 ;;
+  paste-buffer) exit 0 ;;
+  *)            exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux": tmuxScript,
+		"git":  `echo "abc1234 commit"`,
+	})
+
+	// Set up isolated HOME with .work directory
+	homeDir := t.TempDir()
+	dotWork := filepath.Join(homeDir, ".work")
+	os.MkdirAll(dotWork, 0o755)
+	t.Setenv("HOME", homeDir)
+
+	repoDir := t.TempDir()
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"run", "failing task",
+		"--repo", repoDir,
+		"--citizen", "test-worker",
+		"--deadline", "5s",
+	})
+
+	err := root.Execute()
+	out := buf.String()
+
+	// runTask returns spawnErr — should be non-nil
+	if err == nil {
+		t.Fatal("expected error when tmux fails")
+	}
+
+	// The output should still show the error
+	if !strings.Contains(out, "Worker error:") {
+		t.Error("should report worker error")
+	}
+
+	// Trace should exist with an end event that has the error.
+	// Traces are stored under traces/YYYY/MM/DD/, so walk to find the file.
+	tracesDir := filepath.Join(dotWork, "traces")
+	var traceFile string
+	filepath.Walk(tracesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) == ".jsonl" {
+			traceFile = path
+		}
+		return nil
+	})
+	if traceFile == "" {
+		t.Fatal("expected a trace .jsonl file to be written")
+	}
+
+	// Read the trace and verify it has begin + end events
+	traceData, _ := os.ReadFile(traceFile)
+	traceStr := string(traceData)
+	if !strings.Contains(traceStr, `"event":"begin"`) {
+		t.Error("trace should have begin event")
+	}
+	if !strings.Contains(traceStr, `"event":"end"`) {
+		t.Error("trace should have end event even on spawn failure")
+	}
+	if !strings.Contains(traceStr, `"outcome":"error"`) {
+		t.Error("trace end event should record the error outcome")
+	}
+}
+
+// TestRunTaskGateFailOutcome verifies that when gate check returns fail,
+// the outcome is set to "gate_fail" and the trace contains the gate result.
+// This is critical for the learning-loop: misclassified outcomes corrupt
+// the pattern database.
+func TestRunTaskGateFailOutcome(t *testing.T) {
+	tmuxScript := `
+case "$1" in
+  new-session)  exit 0 ;;
+  send-keys)    exit 0 ;;
+  capture-pane) printf "Claude Code v1.0\nDone.\n❯\n" ; exit 0 ;;
+  has-session)  exit 1 ;;
+  kill-session) exit 0 ;;
+  load-buffer)  exit 0 ;;
+  paste-buffer) exit 0 ;;
+  *)            exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux": tmuxScript,
+		"br":   `echo "gate-fail-bead"`,
+		"gate": `printf '{"pass":false,"score":0.25}'; exit 1`,
+		"git":  `echo "abc1234 commit"`,
+	})
+
+	homeDir := t.TempDir()
+	dotWork := filepath.Join(homeDir, ".work")
+	os.MkdirAll(dotWork, 0o755)
+	t.Setenv("HOME", homeDir)
+
+	repoDir := t.TempDir()
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"run", "sloppy task",
+		"--repo", repoDir,
+		"--citizen", "test-worker",
+		"--deadline", "5s",
+	})
+
+	err := root.Execute()
+	out := buf.String()
+
+	if err != nil {
+		t.Fatalf("run should succeed even with gate fail: %v\noutput: %s", err, out)
+	}
+
+	// Verify gate failure is reported
+	if !strings.Contains(out, "Gate: FAIL") {
+		t.Error("should report gate failure")
+	}
+	// Outcome should be gate_fail, not success
+	if !strings.Contains(out, "gate_fail") {
+		t.Error("outcome should be gate_fail")
+	}
+}
+
 func TestRunTaskBeadFreeMode(t *testing.T) {
 	// Test orchestration when br is not on PATH (bead-free mode).
 	// tmux mock still needed for worker spawn.

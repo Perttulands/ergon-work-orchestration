@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -256,6 +257,53 @@ func TestRebuildNoTracesDir(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("expected 0 rebuilt, got %d", count)
+	}
+}
+
+// TestRebuildSkipsCorruptTraces verifies that index rebuild continues past
+// corrupt or truncated trace files. This is a real production scenario:
+// if an agent crashes mid-write, the trace JSONL file may be truncated.
+// The index rebuild must not fail — it should skip the bad file and
+// continue indexing the good ones.
+func TestRebuildSkipsCorruptTraces(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create a good trace
+	tr, err := trace.Open(workDir, "good-trace", "zeus", "good task")
+	if err != nil {
+		t.Fatalf("open good trace: %v", err)
+	}
+	tr.EmitToolCall("bash", "echo ok", 10)
+	tr.Close("success", nil)
+
+	// Create a corrupt trace (truncated JSON)
+	tracesDir := fmt.Sprintf("%s/traces", workDir)
+	corruptPath := fmt.Sprintf("%s/trace-corrupt-001.jsonl", tracesDir)
+	corruptContent := `{"ts":"2026-02-28T12:00:00Z","event":"begin","agent":"zeus"
+{"ts":"2026-02-28T12:00:05Z"` // truncated mid-line
+	os.WriteFile(corruptPath, []byte(corruptContent), 0o644)
+
+	// Create another good trace
+	tr2, err := trace.Open(workDir, "good-trace-2", "ares", "another task")
+	if err != nil {
+		t.Fatalf("open good trace 2: %v", err)
+	}
+	tr2.Close("success", nil)
+
+	// Open index — auto-rebuild should skip the corrupt trace
+	db, err := Open(workDir)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer db.Close()
+
+	runs, err := db.Recent(10)
+	if err != nil {
+		t.Fatalf("recent: %v", err)
+	}
+	// Should have 2 good traces, not 3 (corrupt one skipped)
+	if len(runs) != 2 {
+		t.Errorf("expected 2 runs (corrupt skipped), got %d", len(runs))
 	}
 }
 
