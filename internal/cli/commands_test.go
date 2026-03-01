@@ -420,8 +420,8 @@ func TestFeedWithSeededIndex(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &entry); err != nil {
 		t.Fatalf("invalid JSONL: %v", err)
 	}
-	if entry.BeadID != "feed-001" {
-		t.Errorf("bead_id = %q, want feed-001", entry.BeadID)
+	if entry.ID != "feed-001" {
+		t.Errorf("id = %q, want feed-001", entry.ID)
 	}
 	if entry.Outcome != "success" {
 		t.Errorf("outcome = %q, want success", entry.Outcome)

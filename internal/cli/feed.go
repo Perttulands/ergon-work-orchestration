@@ -8,21 +8,23 @@ import (
 	"time"
 
 	"polis/work/internal/index"
+	"polis/work/internal/trace"
 
 	"github.com/spf13/cobra"
 )
 
 // FeedEntry is the stable contract between work and learning-loop.
+// Top-level fields match learning-loop's db.Run schema for direct ingestion.
+// Work-specific fields live in metadata.
 type FeedEntry struct {
-	BeadID    string   `json:"bead_id"`
-	Citizen   string   `json:"citizen"`
-	Task      string   `json:"task"`
-	Outcome   string   `json:"outcome"`
-	Duration  int64    `json:"duration_s"`
-	GatePass  *bool    `json:"gate_pass,omitempty"`
-	GateScore *float64 `json:"gate_score,omitempty"`
-	Error     string   `json:"error,omitempty"`
-	Time      string   `json:"time"`
+	ID        string         `json:"id"`
+	Task      string         `json:"task"`
+	Outcome   string         `json:"outcome"`
+	DurationS *int           `json:"duration_seconds,omitempty"`
+	Timestamp string         `json:"timestamp"`
+	Agent     string         `json:"agent,omitempty"`
+	ErrorMsg  string         `json:"error_message,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 func newFeedCmd() *cobra.Command {
@@ -31,7 +33,9 @@ func newFeedCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "feed",
 		Short: "Output structured feed for learning-loop consumption",
-		Long:  "Outputs JSONL feed entries for learning-loop. Each line: {bead_id, citizen, task, outcome, duration_s, gate_pass, gate_score, error, time}.",
+		Long: `Outputs JSONL feed entries for learning-loop ingestion.
+Each line is a JSON object matching the learning-loop db.Run schema.
+Work-specific fields (gate_score, citizen, repo, bead_id) are in metadata.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -60,14 +64,7 @@ func newFeedCmd() *cobra.Command {
 				if r.StartTime.Before(sinceTime) {
 					continue
 				}
-				entry := FeedEntry{
-					BeadID:   r.BeadID,
-					Citizen:  r.Agent,
-					Task:     r.Task,
-					Outcome:  r.Outcome,
-					Duration: r.DurationS,
-					Time:     r.StartTime.Format(time.RFC3339),
-				}
+				entry := buildFeedEntry(r)
 				enc.Encode(entry)
 			}
 			return nil
@@ -76,6 +73,75 @@ func newFeedCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&since, "since", "24h", "time window (e.g. 1h, 24h, 7d)")
 	return cmd
+}
+
+// buildFeedEntry maps an index RunRecord to a learning-loop compatible FeedEntry.
+// Enriches with gate data from the trace file when available.
+func buildFeedEntry(r index.RunRecord) FeedEntry {
+	dur := int(r.DurationS)
+	entry := FeedEntry{
+		ID:        r.BeadID,
+		Task:      r.Task,
+		Outcome:   mapOutcome(r.Outcome),
+		DurationS: &dur,
+		Timestamp: r.StartTime.Format(time.RFC3339),
+		Agent:     r.Agent,
+		Metadata: map[string]any{
+			"bead_id": r.BeadID,
+			"citizen": r.Agent,
+		},
+	}
+
+	// Enrich with gate data from trace file
+	if r.TracePath != "" {
+		enrichFromTrace(&entry, r.TracePath)
+	}
+
+	return entry
+}
+
+// enrichFromTrace reads gate_result events from the trace JSONL to populate
+// gate_score and gate_pass in metadata.
+func enrichFromTrace(entry *FeedEntry, tracePath string) {
+	events, err := trace.ReadTrace(tracePath)
+	if err != nil {
+		return
+	}
+
+	for _, e := range events {
+		switch e.EventType {
+		case "gate_result":
+			if e.Score != nil {
+				entry.Metadata["gate_score"] = *e.Score
+			}
+			if e.Pass != nil {
+				entry.Metadata["gate_pass"] = *e.Pass
+			}
+		case "error":
+			if e.Error != "" && entry.ErrorMsg == "" {
+				entry.ErrorMsg = e.Error
+			}
+		}
+	}
+}
+
+// mapOutcome maps work outcomes to learning-loop valid outcomes.
+// Learning-loop accepts: success, partial, failure, error.
+func mapOutcome(outcome string) string {
+	switch outcome {
+	case "success":
+		return "success"
+	case "gate_fail":
+		return "failure"
+	case "timeout":
+		return "error"
+	case "error":
+		return "error"
+	case "incomplete":
+		return "error"
+	default:
+		return "error"
+	}
 }
 
 func parseSince(s string) (time.Time, error) {
