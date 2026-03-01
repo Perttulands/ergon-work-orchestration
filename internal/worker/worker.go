@@ -10,6 +10,29 @@ import (
 	"time"
 )
 
+// tmuxBackend abstracts tmux operations for testing.
+type tmuxBackend interface {
+	requireTmux() error
+	createSession(name, workDir string) error
+	sendKeys(session, keys string) error
+	sendKeysRaw(session string, keys ...string) error
+	sendPrompt(session, prompt string) error
+	capturePane(session string) (string, error)
+	killSession(name string) error
+	sessionExists(name string) bool
+}
+
+// backend is the active tmux backend. Tests may replace it.
+var backend tmuxBackend = &realTmux{}
+
+// Poll/delay intervals. Tests may shorten these.
+var (
+	readyPollInterval      = 2 * time.Second
+	completionPollInterval = 5 * time.Second
+	readySleepAfterTrust   = 1 * time.Second
+	spawnEnvSetupDelay     = 500 * time.Millisecond
+)
+
 // Config holds worker spawn configuration.
 type Config struct {
 	SessionName string        // tmux session name (must be unique)
@@ -54,7 +77,7 @@ func Spawn(cfg Config) (*Result, error) {
 		killSession(cfg.SessionName)
 		return nil, fmt.Errorf("unset env: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(spawnEnvSetupDelay)
 
 	// 3. Launch claude --dangerously-skip-permissions
 	if err := sendKeys(cfg.SessionName, "claude --dangerously-skip-permissions"); err != nil {
@@ -112,18 +135,31 @@ func KillSession(name string) error {
 
 // SessionExists checks if a tmux session exists.
 func SessionExists(name string) bool {
-	cmd := exec.Command("tmux", "has-session", "-t", name)
-	return cmd.Run() == nil
+	return backend.sessionExists(name)
 }
 
-func requireTmux() error {
+// --- package-level delegators to backend ---
+
+func requireTmux() error                              { return backend.requireTmux() }
+func createSession(name, workDir string) error         { return backend.createSession(name, workDir) }
+func sendKeys(session, keys string) error              { return backend.sendKeys(session, keys) }
+func sendKeysRaw(session string, keys ...string) error { return backend.sendKeysRaw(session, keys...) }
+func sendPrompt(session, prompt string) error          { return backend.sendPrompt(session, prompt) }
+func capturePane(session string) (string, error)       { return backend.capturePane(session) }
+func killSession(name string) error                    { return backend.killSession(name) }
+
+// --- realTmux implements tmuxBackend using actual tmux commands ---
+
+type realTmux struct{}
+
+func (r *realTmux) requireTmux() error {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		return fmt.Errorf("tmux not found on PATH")
 	}
 	return nil
 }
 
-func createSession(name, workDir string) error {
+func (r *realTmux) createSession(name, workDir string) error {
 	cmd := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", workDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
@@ -131,7 +167,7 @@ func createSession(name, workDir string) error {
 	return nil
 }
 
-func sendKeys(session, keys string) error {
+func (r *realTmux) sendKeys(session, keys string) error {
 	cmd := exec.Command("tmux", "send-keys", "-t", session, keys, "Enter")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
@@ -139,8 +175,7 @@ func sendKeys(session, keys string) error {
 	return nil
 }
 
-// sendKeysRaw sends key(s) to a tmux session without appending Enter.
-func sendKeysRaw(session string, keys ...string) error {
+func (r *realTmux) sendKeysRaw(session string, keys ...string) error {
 	args := append([]string{"send-keys", "-t", session}, keys...)
 	cmd := exec.Command("tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -149,7 +184,7 @@ func sendKeysRaw(session string, keys ...string) error {
 	return nil
 }
 
-func sendPrompt(session, prompt string) error {
+func (r *realTmux) sendPrompt(session, prompt string) error {
 	// Write prompt to a temp file and use tmux load-buffer + paste-buffer.
 	// This is safer than send-keys for multi-line / long prompts because
 	// tmux send-keys interprets special characters and can corrupt text.
@@ -179,10 +214,10 @@ func sendPrompt(session, prompt string) error {
 	}
 
 	// Send Enter to submit the prompt
-	return sendKeysRaw(session, "Enter")
+	return r.sendKeysRaw(session, "Enter")
 }
 
-func capturePane(session string) (string, error) {
+func (r *realTmux) capturePane(session string) (string, error) {
 	cmd := exec.Command("tmux", "capture-pane", "-t", session, "-p")
 	out, err := cmd.Output()
 	if err != nil {
@@ -190,6 +225,21 @@ func capturePane(session string) (string, error) {
 	}
 	return string(out), nil
 }
+
+func (r *realTmux) killSession(name string) error {
+	cmd := exec.Command("tmux", "kill-session", "-t", name)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("kill session %s: %w", name, err)
+	}
+	return nil
+}
+
+func (r *realTmux) sessionExists(name string) bool {
+	cmd := exec.Command("tmux", "has-session", "-t", name)
+	return cmd.Run() == nil
+}
+
+// --- detection and wait logic ---
 
 // readyState describes what waitForReady detected in a pane capture.
 type readyState int
@@ -227,26 +277,37 @@ func waitForReady(session string, timeout time.Duration) error {
 			if !trustDismissed {
 				_ = sendKeysRaw(session, "Enter")
 				trustDismissed = true
-				time.Sleep(1 * time.Second)
+				time.Sleep(readySleepAfterTrust)
 				continue
 			}
 		}
 
-		time.Sleep(2 * time.Second)
+		time.Sleep(readyPollInterval)
 	}
 	return fmt.Errorf("timed out waiting for claude to start (session: %s)", session)
 }
 
 // detectCompletion checks if pane output indicates the worker is done.
-// Returns true when the last line shows the idle prompt (❯) and no
-// tool activity is detected on the preceding line.
+// Returns true when the idle prompt (❯) appears near the bottom of the
+// pane and no tool activity is detected nearby. Claude Code's UI may show
+// additional lines after ❯ (separator, bypass permissions notice, suggestions),
+// so we scan the last several lines rather than just the last one.
 func detectCompletion(output string) bool {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) <= 2 {
 		return false
 	}
-	lastLine := strings.TrimSpace(lines[len(lines)-1])
-	return strings.HasPrefix(lastLine, "❯") && !isStillWorking(output)
+	// Scan the last 5 lines for the ❯ prompt
+	start := len(lines) - 5
+	if start < 0 {
+		start = 0
+	}
+	for _, line := range lines[start:] {
+		if strings.HasPrefix(strings.TrimSpace(line), "❯") {
+			return !isStillWorking(output)
+		}
+	}
+	return false
 }
 
 func waitForCompletion(session string, maxWait time.Duration) string {
@@ -270,32 +331,35 @@ func waitForCompletion(session string, maxWait time.Duration) string {
 			return lastOutput
 		}
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(completionPollInterval)
 	}
 	return lastOutput
 }
 
 // isStillWorking checks if the pane output suggests active work.
+// Scans the last several lines for tool activity markers.
 func isStillWorking(output string) bool {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) < 3 {
 		return false
 	}
-	// If the second-to-last line contains tool activity markers, still working
-	prev := lines[len(lines)-2]
+	// Check lines near the bottom for tool activity markers
+	start := len(lines) - 6
+	if start < 0 {
+		start = 0
+	}
 	workingIndicators := []string{"Reading", "Writing", "Editing", "Running", "Searching"}
-	for _, ind := range workingIndicators {
-		if strings.Contains(prev, ind) {
-			return true
+	for _, line := range lines[start:] {
+		trimmed := strings.TrimSpace(line)
+		// Skip the ❯ line itself and lines below it
+		if strings.HasPrefix(trimmed, "❯") {
+			break
+		}
+		for _, ind := range workingIndicators {
+			if strings.Contains(line, ind) {
+				return true
+			}
 		}
 	}
 	return false
-}
-
-func killSession(name string) error {
-	cmd := exec.Command("tmux", "kill-session", "-t", name)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("kill session %s: %w", name, err)
-	}
-	return nil
 }

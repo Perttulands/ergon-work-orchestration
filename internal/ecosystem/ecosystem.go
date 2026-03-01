@@ -171,10 +171,11 @@ func BrCreate(title, repo string) (*BeadCreateResult, error) {
 		return nil, nil
 	}
 
-	args := []string{"create", title}
+	args := []string{"create", title, "--silent"}
 	cmd := exec.Command("br", args...)
 	cmd.Dir = repo
-	out, err := cmd.CombinedOutput()
+	// Use Output() to avoid stderr contamination from br's INFO logs.
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("br create: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -200,16 +201,10 @@ func BrClose(id, reason, repo string) error {
 
 // --- Relay + agent state integration ---
 
-// BrAgentState sets the state of a br agent bead.
-// Returns nil if br is not available.
+// BrAgentState sets the state of a br agent.
+// br (beads_rust) does not currently support agent state tracking,
+// so this is a no-op that degrades gracefully.
 func BrAgentState(agent, state string) error {
-	if !Available("br") {
-		return nil
-	}
-	cmd := exec.Command("br", "agent", "state", agent, state)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("br agent state %s %s: %s: %w", agent, state, strings.TrimSpace(string(out)), err)
-	}
 	return nil
 }
 
@@ -263,7 +258,10 @@ func GateCheck(repo, citizen string) (*GateResult, error) {
 	}
 	cmd := exec.Command("gate", args...)
 	cmd.Dir = repo
-	out, err := cmd.CombinedOutput()
+	// Use Output() not CombinedOutput() — gate writes JSON to stdout only.
+	// CombinedOutput() captures stderr too, where br's INFO logs leak through
+	// gate's bead.Record calls, contaminating the JSON and breaking parsing.
+	out, err := cmd.Output()
 	raw := strings.TrimSpace(string(out))
 
 	// gate may return non-zero for failures but still produce valid JSON

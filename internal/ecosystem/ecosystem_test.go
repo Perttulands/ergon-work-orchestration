@@ -377,25 +377,11 @@ func TestBrCloseError(t *testing.T) {
 	}
 }
 
-func TestBrAgentStateWithMock(t *testing.T) {
-	testutil.SandboxPATH(t, map[string]string{
-		"br": `echo "state set"`,
-	})
-
+func TestBrAgentStateNoOp(t *testing.T) {
+	// BrAgentState is a no-op since br doesn't support agent state tracking
 	err := BrAgentState("zeus", "working")
 	if err != nil {
-		t.Errorf("BrAgentState should succeed with mock: %v", err)
-	}
-}
-
-func TestBrAgentStateError(t *testing.T) {
-	testutil.SandboxPATH(t, map[string]string{
-		"br": `echo "error" >&2; exit 1`,
-	})
-
-	err := BrAgentState("zeus", "working")
-	if err == nil {
-		t.Error("BrAgentState should return error when br fails")
+		t.Errorf("BrAgentState should always return nil: %v", err)
 	}
 }
 
@@ -524,6 +510,28 @@ func TestGateCheckInvalidJSONPassExit(t *testing.T) {
 	// Invalid JSON but exit 0 → pass=true
 	if !result.Pass {
 		t.Error("expected pass=true for zero exit with invalid JSON")
+	}
+}
+
+func TestGateCheckStderrDoesNotContaminateJSON(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		// Simulate gate calling br which writes INFO logs to stderr
+		"gate": `echo "INFO beads_rust::sync: Auto-flush complete" >&2; printf '{"pass":false,"score":0.75}'; exit 1`,
+	})
+
+	result, err := GateCheck(t.TempDir(), "worker")
+	if err != nil {
+		t.Fatalf("GateCheck should not error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// JSON should parse correctly despite stderr noise
+	if result.Pass {
+		t.Error("expected pass=false from JSON")
+	}
+	if result.Score != 0.75 {
+		t.Errorf("score = %f, want 0.75 (stderr contamination?)", result.Score)
 	}
 }
 
