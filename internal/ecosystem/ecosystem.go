@@ -199,6 +199,43 @@ func BrClose(id, reason, repo string) error {
 	return nil
 }
 
+// BrShow fetches a bead by ID and returns its metadata.
+// Returns nil with no error if br is not available.
+func BrShow(id string) (*BrShowResult, error) {
+	if !Available("br") {
+		return nil, nil
+	}
+	if strings.TrimSpace(id) == "" {
+		return nil, nil
+	}
+
+	cmd := exec.Command("br", "show", id, "--json")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("br show %s: %w", id, err)
+	}
+
+	// br show --json returns an array with one element
+	var results []BrShowResult
+	if err := json.Unmarshal(out, &results); err != nil {
+		return nil, fmt.Errorf("parse br show: %w", err)
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("br show %s: no results", id)
+	}
+	return &results[0], nil
+}
+
+// BrShowResult is the bead metadata from br show --json.
+type BrShowResult struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Type        string `json:"issue_type"`
+	Priority    int    `json:"priority"`
+	Status      string `json:"status"`
+}
+
 // --- Relay + agent state integration ---
 
 // BrAgentState sets the state of a br agent.

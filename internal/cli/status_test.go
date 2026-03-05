@@ -2,7 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"strings"
 	"testing"
+
+	"polis/work/internal/testutil"
 )
 
 func TestStatusCommandExists(t *testing.T) {
@@ -20,6 +23,10 @@ func TestStatusCommandExists(t *testing.T) {
 }
 
 func TestStatusCommandRuns(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux": `printf 'work-pol-abc Thu Feb 27 10:30:00 2026\nother-session Thu Feb 27 09:00:00 2026\n'`,
+	})
+
 	root := NewRoot("test")
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
@@ -28,13 +35,39 @@ func TestStatusCommandRuns(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("status failed: %v", err)
 	}
-	// Should produce some output (either sessions or "no active")
-	if buf.Len() == 0 {
-		t.Error("expected output from status command")
+	out := buf.String()
+	if !strings.Contains(out, "Active work sessions: 1") {
+		t.Errorf("expected 1 active session, got: %s", out)
+	}
+	if !strings.Contains(out, "work-pol-abc") {
+		t.Errorf("expected work-pol-abc in output, got: %s", out)
+	}
+}
+
+func TestStatusCommandNoSessions(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux": `printf 'claude-zeus Thu Feb 27 09:00:00 2026\n'`,
+	})
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "No active work sessions") {
+		t.Errorf("expected no active sessions message, got: %s", out)
 	}
 }
 
 func TestStatusJSON(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux": `printf 'work-pol-abc Thu Feb 27 10:30:00 2026\n'`,
+	})
+
 	root := NewRoot("test")
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
@@ -42,6 +75,27 @@ func TestStatusJSON(t *testing.T) {
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("status --json failed: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "work-pol-abc") {
+		t.Errorf("expected work-pol-abc in JSON output, got: %s", out)
+	}
+}
+
+func TestStatusNoTmux(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("status should not fail without tmux: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "No active work sessions") {
+		t.Errorf("expected graceful degradation, got: %s", out)
 	}
 }
 

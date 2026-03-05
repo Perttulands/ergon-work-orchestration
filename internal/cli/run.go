@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"polis/work/internal/beadlint"
 	workctx "polis/work/internal/context"
 	"polis/work/internal/ecosystem"
 	"polis/work/internal/index"
@@ -82,6 +83,11 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		}
 	}
 
+	// Pre-dispatch lint: refuse to start if bead quality is too low
+	if lintErr := lintBeforeDispatch(cmd, task); lintErr != nil {
+		return lintErr
+	}
+
 	// Step 1: Create bead
 	beadID := "work-" + randomID()
 	bead, err := ecosystem.BrCreate(task, repo)
@@ -135,6 +141,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		WorkDir:     repo,
 		Prompt:      prompt,
 		Deadline:    deadline,
+		AgentName:   citizen,
 	})
 
 	outcome := "success"
@@ -303,6 +310,52 @@ func randomID() string {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+// lintBeforeDispatch validates the task (or bead) quality before starting work.
+// If task looks like a bead ID (pol-xxx), fetches the bead and lints it.
+// Otherwise lints the task title for minimum quality.
+func lintBeforeDispatch(cmd *cobra.Command, task string) error {
+	if beadlint.IsBeadID(task) {
+		bead, err := ecosystem.BrShow(task)
+		if err != nil {
+			cmd.Printf("  Warning: could not fetch bead for lint: %v\n", err)
+			// Degrade gracefully — lint the raw task string instead
+			return lintTaskTitle(cmd, task)
+		}
+		if bead == nil {
+			// br not available — skip lint
+			return nil
+		}
+		issues := beadlint.LintBead(beadlint.Bead{
+			ID:          bead.ID,
+			Title:       bead.Title,
+			Description: bead.Description,
+			Type:        bead.Type,
+			Priority:    bead.Priority,
+		})
+		if beadlint.HasErrors(issues) {
+			cmd.Printf("Bead %s failed lint:\n%s", task, beadlint.FormatIssues(issues))
+			return fmt.Errorf("bead %s failed quality lint — fix issues before dispatch", task)
+		}
+		if len(issues) > 0 {
+			cmd.Printf("  Lint warnings:\n%s", beadlint.FormatIssues(issues))
+		}
+		return nil
+	}
+	return lintTaskTitle(cmd, task)
+}
+
+func lintTaskTitle(cmd *cobra.Command, task string) error {
+	issues := beadlint.LintTitle(task)
+	if beadlint.HasErrors(issues) {
+		cmd.Printf("Task failed lint:\n%s", beadlint.FormatIssues(issues))
+		return fmt.Errorf("task title failed quality lint — be more specific (>= 5 words)")
+	}
+	if len(issues) > 0 {
+		cmd.Printf("  Lint warnings:\n%s", beadlint.FormatIssues(issues))
+	}
+	return nil
 }
 
 // toolDegradation describes what happens when an optional tool is missing.

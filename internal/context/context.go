@@ -105,7 +105,10 @@ func Gather(cfg Config) (*Result, error) {
 	// 5. Query past beads via br search, fall back to br list --status closed
 	beads, err := queryBeads(cfg)
 	if err != nil || len(beads) == 0 {
-		beads, _ = listClosedBeads(cfg.Repo)
+		fallbackBeads, fallbackErr := listClosedBeads(cfg.Repo)
+		if fallbackErr == nil {
+			beads = fallbackBeads
+		}
 	}
 	if len(beads) > 0 {
 		r.PastBeads = beads

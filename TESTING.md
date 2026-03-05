@@ -9,10 +9,10 @@ Test quality assessment per the [Polis Test Quality Rubric](../TEST_RUBRIC.md).
 | **E2E Realism** | 3/5 | Two full pipeline integration tests (happy + degraded) exercise context→trace→index→close-reason→citizen. Run orchestration tested with mocked tmux/br/gate. Deliberate and decide workflows tested end-to-end. Missing: no test exercises `work run` with real tmux and a real (or realistic) Claude session. |
 | **Unit Test Behaviour Focus** | 4/5 | Detection logic (detectReady, detectCompletion, isStillWorking) tested via observable outputs. Format/parse functions tested by contract. assemblePrompt and buildRunRecord tested by verifying output content, not internals. A few tests are still implementation-coupled (e.g. verifying temp file creation in sendPrompt). |
 | **Edge Case & Error Path** | 3/5 | Graceful degradation thoroughly tested (every external tool: br, bv, relay, gate, loop). Invalid JSON, missing files, tool failures, timeouts all covered. Missing: concurrent Spawn with same session name race, partial write failures (disk full), learning-loop script hangs, index SQLite contention. |
-| **Test Isolation & Reliability** | 2/5 | Good patterns: t.TempDir(), t.Setenv(), testutil.SandboxPATH(). Bad patterns: 8+ tests use real tmux with time.Sleep() — inherently flaky on slow systems. Worker tests take 30s due to timing. Session names include time.Now().Format("150405") which could collide if two tests run in the same second. |
+| **Test Isolation & Reliability** | 4/5 | Good patterns: t.TempDir(), t.Setenv(), testutil.SandboxPATH(). All tmux calls mocked via fakeTmux (in-memory) or SandboxPATH (shell script fakes). Worker tests run in ~0.15s (was 30s). Status tests sandboxed with deterministic tmux output. Only remaining concern: session names include time.Now().Format("150405") which could collide if two tests run in the same second. |
 | **Regression Value** | 4/5 | Integration tests (TestFullPipelineIntegration, TestRunTaskOrchestration) would catch most regressions in the data flow. State machine tests (detectReady, detectCompletion) protect the most fragile logic. Trace format tests ensure JSONL schema stability. Gate result interpretation tested with pass/fail/invalid-JSON. TestRunTaskTraceRecordedOnSpawnError ensures error traces are always written. Spawn orchestration (the highest-risk function) is only tested at the component level, not end-to-end. |
 
-**Total: 16/25 — Grade C** (functional but with known gaps)
+**Total: 18/25 — Grade B-** (solid with known gaps)
 
 ## What the Suite is MISSING
 
@@ -34,16 +34,23 @@ Test quality assessment per the [Polis Test Quality Rubric](../TEST_RUBRIC.md).
 
 7. **Context section ordering contract** — Agents consume the context markdown and depend on section headers. If a header changes, agent prompts break. No contract test enforces the header names.
 
-8. **Status command with real tmux** — parseTmuxSessions is well-tested but getActiveSessions (which calls real tmux) is only tested via the command, not for edge cases like many sessions or sessions with special characters.
+8. **Status command edge cases** — parseTmuxSessions is well-tested and getActiveSessions is sandboxed via SandboxPATH. Missing: edge cases like sessions with special characters in names.
 
 ## Test Architecture Notes
 
 - **testutil.SandboxPATH** is the primary mocking pattern. It creates fake shell scripts for external tools (br, bv, gate, relay, loop, tmux) and restricts PATH. System tools (sh, bash, etc.) are symlinked from the real PATH.
-- **Worker tests** use real tmux sessions (not mocks) for integration testing. This provides high fidelity but makes tests slow (~30s) and timing-dependent.
+- **Worker tests** use fakeTmux (in-memory mock implementing tmuxBackend) for unit tests and SandboxPATH shell script fakes for integration tests. No real tmux needed. Runs in ~0.15s.
 - **CLI tests** test through cobra command execution, which exercises flag parsing, argument validation, and output formatting in one shot.
 - **Trace tests** are pure — no external dependencies. They verify the JSONL format contract directly.
 
 ## Changelog
+
+### 2026-03-01 — Agent: ares
+- Fixed: Status tests (TestStatusCommandRuns, TestStatusJSON) now use SandboxPATH with fake tmux instead of calling real tmux
+- Added: TestStatusCommandNoSessions — verifies graceful output when no work-* sessions exist
+- Added: TestStatusNoTmux — verifies graceful degradation when tmux is not on PATH
+- Fixed: Run test task titles updated to satisfy beadlint >= 5 word requirement
+- Updated: TESTING.md scores to reflect tmux mocking improvements (Isolation 2/5 → 4/5)
 
 ### 2026-02-28 — Agent: zeus
 - Added: TestRunTaskTraceRecordedOnSpawnError — verifies trace file gets begin+end events even when worker.Spawn fails (critical for debugging agent failures)

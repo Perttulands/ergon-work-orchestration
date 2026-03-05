@@ -39,6 +39,7 @@ type Config struct {
 	WorkDir     string        // working directory for the session
 	Prompt      string        // the assembled task prompt to send
 	Deadline    time.Duration // max time before killing the session
+	AgentName   string        // relay identity (sets RELAY_AGENT env var)
 }
 
 // Result holds the outcome of a worker run.
@@ -78,6 +79,15 @@ func Spawn(cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("unset env: %w", err)
 	}
 	time.Sleep(spawnEnvSetupDelay)
+
+	// 2b. Set RELAY_AGENT so the worker identifies correctly on the relay bus
+	if cfg.AgentName != "" {
+		if err := sendKeys(cfg.SessionName, fmt.Sprintf("export RELAY_AGENT=%s", cfg.AgentName)); err != nil {
+			killSession(cfg.SessionName)
+			return nil, fmt.Errorf("set relay agent: %w", err)
+		}
+		time.Sleep(spawnEnvSetupDelay)
+	}
 
 	// 3. Launch claude --dangerously-skip-permissions
 	if err := sendKeys(cfg.SessionName, "claude --dangerously-skip-permissions"); err != nil {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"polis/work/internal/beadlint"
 	workctx "polis/work/internal/context"
 	"polis/work/internal/ecosystem"
 	"polis/work/internal/testutil"
@@ -213,7 +214,7 @@ esac
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
 	root.SetArgs([]string{
-		"run", "add unit tests",
+		"run", "add unit tests for auth module",
 		"--repo", repoDir,
 		"--citizen", "test-worker",
 		"--deadline", "10s",
@@ -228,7 +229,7 @@ esac
 	}
 
 	// Verify key orchestration outputs
-	if !strings.Contains(out, "Starting: add unit tests") {
+	if !strings.Contains(out, "Starting: add unit tests for auth module") {
 		t.Error("should print task name")
 	}
 	if !strings.Contains(out, "Citizen: test-worker") {
@@ -277,7 +278,7 @@ esac
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
 	root.SetArgs([]string{
-		"run", "failing task",
+		"run", "handle failing task when tmux unavailable",
 		"--repo", repoDir,
 		"--citizen", "test-worker",
 		"--deadline", "5s",
@@ -362,7 +363,7 @@ esac
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
 	root.SetArgs([]string{
-		"run", "sloppy task",
+		"run", "sloppy task with bad gate outcome",
 		"--repo", repoDir,
 		"--citizen", "test-worker",
 		"--deadline", "5s",
@@ -418,7 +419,7 @@ esac
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
 	root.SetArgs([]string{
-		"run", "fix bug",
+		"run", "fix authentication bug in login flow",
 		"--repo", repoDir,
 		"--citizen", "solo-worker",
 		"--deadline", "5s",
@@ -437,6 +438,199 @@ esac
 	}
 	if !strings.Contains(out, "Done:") {
 		t.Error("should complete even in bead-free mode")
+	}
+}
+
+// --- Bead lint integration tests ---
+
+func TestRunTaskRejectsShortTitle(t *testing.T) {
+	testutil.SandboxPATH(t, map[string]string{
+		"git": `echo "abc1234 commit"`,
+	})
+
+	homeDir := t.TempDir()
+	os.MkdirAll(filepath.Join(homeDir, ".work"), 0o755)
+	t.Setenv("HOME", homeDir)
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"run", "fix bug",
+		"--repo", t.TempDir(),
+		"--citizen", "test-worker",
+		"--deadline", "5s",
+	})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for short task title")
+	}
+	if !strings.Contains(err.Error(), "quality lint") {
+		t.Errorf("error should mention lint: %v", err)
+	}
+}
+
+func TestRunTaskAcceptsLongTitle(t *testing.T) {
+	// Verify that a well-formed title passes lint
+	// (test exits at worker spawn, not at lint)
+	tmuxScript := `
+case "$1" in
+  new-session)  exit 0 ;;
+  send-keys)    exit 0 ;;
+  capture-pane) printf "Claude Code v1.0\nDone.\n❯\n" ; exit 0 ;;
+  has-session)  exit 1 ;;
+  kill-session) exit 0 ;;
+  load-buffer)  exit 0 ;;
+  paste-buffer) exit 0 ;;
+  *)            exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux": tmuxScript,
+		"br":   `echo "lint-pass-bead"`,
+		"gate": `echo '{"pass":true,"score":0.9}'`,
+		"git":  `echo "abc1234 commit"`,
+	})
+
+	homeDir := t.TempDir()
+	os.MkdirAll(filepath.Join(homeDir, ".work"), 0o755)
+	t.Setenv("HOME", homeDir)
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"run", "add comprehensive unit tests for authentication module",
+		"--repo", t.TempDir(),
+		"--citizen", "test-worker",
+		"--deadline", "5s",
+	})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("well-formed task should pass lint: %v", err)
+	}
+}
+
+func TestRunTaskRejectsBeadWithMissingFields(t *testing.T) {
+	// Mock br show returning a bead with missing fields
+	brScript := `
+case "$1" in
+  show) echo '[{"id":"pol-bad1","title":"fix it","description":"short","issue_type":"story","priority":0}]' ;;
+  create) echo "pol-bad1" ;;
+  *) exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"br":  brScript,
+		"git": `echo "abc1234 commit"`,
+	})
+
+	homeDir := t.TempDir()
+	os.MkdirAll(filepath.Join(homeDir, ".work"), 0o755)
+	t.Setenv("HOME", homeDir)
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"run", "pol-bad1",
+		"--repo", t.TempDir(),
+		"--citizen", "test-worker",
+		"--deadline", "5s",
+	})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for bad bead")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "failed lint") {
+		t.Errorf("output should mention lint failure: %s", out)
+	}
+}
+
+func TestRunTaskPassesBeadWithGoodFields(t *testing.T) {
+	brScript := `
+case "$1" in
+  show) echo '[{"id":"pol-good","title":"enforce minimum bead quality before dispatch","description":"A detailed description of what needs to happen with enough context.","issue_type":"feature","priority":2}]' ;;
+  create) echo "pol-good" ;;
+  close) exit 0 ;;
+  *) exit 0 ;;
+esac
+`
+	tmuxScript := `
+case "$1" in
+  new-session)  exit 0 ;;
+  send-keys)    exit 0 ;;
+  capture-pane) printf "Claude Code v1.0\nDone.\n❯\n" ; exit 0 ;;
+  has-session)  exit 1 ;;
+  kill-session) exit 0 ;;
+  load-buffer)  exit 0 ;;
+  paste-buffer) exit 0 ;;
+  *)            exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"br":   brScript,
+		"tmux": tmuxScript,
+		"gate": `echo '{"pass":true,"score":0.9}'`,
+		"git":  `echo "abc1234 commit"`,
+	})
+
+	homeDir := t.TempDir()
+	os.MkdirAll(filepath.Join(homeDir, ".work"), 0o755)
+	t.Setenv("HOME", homeDir)
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{
+		"run", "pol-good",
+		"--repo", t.TempDir(),
+		"--citizen", "test-worker",
+		"--deadline", "5s",
+	})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("well-formed bead should pass lint: %v\noutput: %s", err, buf.String())
+	}
+}
+
+// --- beadlint package integration ---
+
+func TestLintBeforeDispatch_ShortTitle(t *testing.T) {
+	issues := beadlint.LintTitle("fix bug")
+	if !beadlint.HasErrors(issues) {
+		t.Fatal("2-word title should fail lint")
+	}
+}
+
+func TestLintBeforeDispatch_ValidTitle(t *testing.T) {
+	issues := beadlint.LintTitle("add comprehensive unit tests for authentication")
+	if beadlint.HasErrors(issues) {
+		t.Errorf("good title should pass lint: %s", beadlint.FormatIssues(issues))
+	}
+}
+
+func TestLintBeforeDispatch_BeadAllBad(t *testing.T) {
+	issues := beadlint.LintBead(beadlint.Bead{
+		ID:          "pol-bad",
+		Title:       "fix",
+		Description: "x",
+		Type:        "unknown",
+		Priority:    0,
+	})
+	errors := 0
+	for _, i := range issues {
+		if i.Severity == beadlint.Error {
+			errors++
+		}
+	}
+	if errors < 4 {
+		t.Errorf("expected >= 4 errors, got %d: %s", errors, beadlint.FormatIssues(issues))
 	}
 }
 
