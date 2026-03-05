@@ -62,7 +62,9 @@ func runDecide(cmd *cobra.Command, question string, evidence []string, decider, 
 	title := fmt.Sprintf("decide: %s", truncate(question, 60))
 	bead, err := ecosystem.BrCreate(title, repo)
 	if err != nil {
-		cmd.Printf("  Warning: br create failed: %v\n", err)
+		if policyErr := applyFailurePolicy(cmd, stepBrCreate, err); policyErr != nil {
+			return policyErr
+		}
 	} else if bead != nil {
 		beadID = bead.ID
 		cmd.Printf("  Gate bead: %s\n", beadID)

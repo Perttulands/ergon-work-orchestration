@@ -1,18 +1,14 @@
 package main
 
 import (
-	"fmt"
-	"os"
-
 	"polis/work/internal/cli"
+
+	"github.com/spf13/cobra"
 )
 
 var version = "dev"
 
 func main() {
 	root := cli.NewRoot(version)
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	cobra.CheckErr(root.Execute())
 }

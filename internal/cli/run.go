@@ -99,7 +99,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	beadID := "work-" + randomID()
 	bead, err := ecosystem.BrCreate(task, repo)
 	if err != nil {
-		cmd.Printf("  Warning: br create failed: %v (continuing in bead-free mode)\n", err)
+		if policyErr := applyFailurePolicy(cmd, stepBrCreate, err); policyErr != nil {
+			return policyErr
+		}
 	} else if bead != nil {
 		beadID = bead.ID
 		cmd.Printf("  Bead: %s\n", beadID)
@@ -108,14 +110,14 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	}
 
 	// Step 1b: Agent state → working + relay heartbeat
-	if err := ecosystem.BrAgentState(citizen, "working"); err != nil {
-		cmd.Printf("  Warning: br agent state: %v\n", err)
+	if policyErr := applyFailurePolicy(cmd, stepBrAgentWorking, ecosystem.BrAgentState(citizen, "working")); policyErr != nil {
+		return policyErr
 	}
-	if err := ecosystem.RelayRegister(citizen); err != nil {
-		cmd.Printf("  Warning: relay register: %v\n", err)
+	if policyErr := applyFailurePolicy(cmd, stepRelayRegister, ecosystem.RelayRegister(citizen)); policyErr != nil {
+		return policyErr
 	}
-	if err := ecosystem.RelayHeartbeat(citizen); err != nil {
-		cmd.Printf("  Warning: relay heartbeat: %v\n", err)
+	if policyErr := applyFailurePolicy(cmd, stepRelayHeartbeat, ecosystem.RelayHeartbeat(citizen)); policyErr != nil {
+		return policyErr
 	}
 
 	// Step 2: Gather context
@@ -128,7 +130,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		WorkDir: workDir,
 	})
 	if err != nil {
-		cmd.Printf("  Warning: context gathering failed: %v\n", err)
+		if policyErr := applyFailurePolicy(cmd, stepContextGather, err); policyErr != nil {
+			return policyErr
+		}
 	}
 
 	// Step 3: Assemble prompt
@@ -137,7 +141,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	// Step 4: Open trace
 	tr, traceErr := trace.Open(workDir, beadID, citizen, task)
 	if traceErr != nil {
-		cmd.Printf("  Warning: trace open failed: %v\n", traceErr)
+		if policyErr := applyFailurePolicy(cmd, stepTraceOpen, traceErr); policyErr != nil {
+			return policyErr
+		}
 	} else {
 		cmd.Printf("  Trace: %s\n", tr.FilePath())
 	}
@@ -172,7 +178,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	if spawnErr == nil {
 		gate, gateErr := ecosystem.GateCheck(repo, citizen)
 		if gateErr != nil {
-			cmd.Printf("  Warning: gate check failed: %v\n", gateErr)
+			if policyErr := applyFailurePolicy(cmd, stepGateCheck, gateErr); policyErr != nil {
+				return policyErr
+			}
 		} else if gate != nil {
 			gateResult = gate
 			if tr != nil {
@@ -209,10 +217,14 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		// Index the run for fast queries
 		idx, idxErr := index.Open(workDir)
 		if idxErr != nil {
-			cmd.Printf("  Warning: index open failed: %v\n", idxErr)
+			if policyErr := applyFailurePolicy(cmd, stepIndexOpen, idxErr); policyErr != nil {
+				return policyErr
+			}
 		} else {
 			if recErr := idx.Record(meta); recErr != nil {
-				cmd.Printf("  Warning: index record failed: %v\n", recErr)
+				if policyErr := applyFailurePolicy(cmd, stepIndexRecord, recErr); policyErr != nil {
+					return policyErr
+				}
 			}
 			idx.Close()
 		}
@@ -221,7 +233,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	// Step 8: Learning-loop feedback collection
 	feedbackRecord := buildRunRecord(beadID, citizen, resolvedRuntime, outcome, durationS, gateResult, ctx)
 	if fbErr := ecosystem.CollectFeedback(feedbackRecord, workDir); fbErr != nil {
-		cmd.Printf("  Warning: feedback collection failed: %v\n", fbErr)
+		if policyErr := applyFailurePolicy(cmd, stepFeedbackCollect, fbErr); policyErr != nil {
+			return policyErr
+		}
 	}
 
 	// Step 8b: Feed run to learning-loop binary for pattern extraction
@@ -233,13 +247,17 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 			errMsg = spawnErr.Error()
 		}
 		if ingestErr := ecosystem.IngestRun(beadID, task, outcome, citizen, durationS, testsPassed, lintPassed, nil, errMsg); ingestErr != nil {
-			cmd.Printf("  Warning: loop ingest failed: %v\n", ingestErr)
+			if policyErr := applyFailurePolicy(cmd, stepLoopIngest, ingestErr); policyErr != nil {
+				return policyErr
+			}
 		}
 	}
 
 	// Step 9: Record citizen experience
 	if expErr := workctx.AppendCitizenExperience(workDir, citizen, task, outcome, beadID); expErr != nil {
-		cmd.Printf("  Warning: failed to record experience: %v\n", expErr)
+		if policyErr := applyFailurePolicy(cmd, stepExperienceAppend, expErr); policyErr != nil {
+			return policyErr
+		}
 	}
 
 	// Step 10: Auto close reason from trace + diff
@@ -247,7 +265,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	if tr != nil {
 		cr, crErr := ecosystem.DeriveCloseReason(tr.FilePath(), repo)
 		if crErr != nil {
-			cmd.Printf("  Warning: derive close reason: %v\n", crErr)
+			if policyErr := applyFailurePolicy(cmd, stepCloseReasonDerive, crErr); policyErr != nil {
+				return policyErr
+			}
 		} else {
 			closeReason = ecosystem.FormatCloseReason(cr)
 			cmd.Printf("  Close reason: %s\n", closeReason)
@@ -257,7 +277,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	// Step 11: Close bead with derived reason
 	if bead != nil {
 		if closeErr := ecosystem.BrClose(beadID, closeReason, repo); closeErr != nil {
-			cmd.Printf("  Warning: br close failed: %v\n", closeErr)
+			if policyErr := applyFailurePolicy(cmd, stepBrClose, closeErr); policyErr != nil {
+				return policyErr
+			}
 		}
 	}
 
@@ -270,17 +292,21 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	relayPayload := fmt.Sprintf(`{"bead_id":"%s","outcome":"%s","gate_score":%s,"duration":"%ds"}`,
 		beadID, outcome, gateScoreStr, durationS)
 	if err := ecosystem.RelaySend(citizen, "athena", summary, beadID, "task_result", relayPayload); err != nil {
-		cmd.Printf("  Warning: relay send athena: %v\n", err)
+		if policyErr := applyFailurePolicy(cmd, stepRelaySendAthena, err); policyErr != nil {
+			return policyErr
+		}
 	}
 	if notify != "" && notify != "athena" {
 		if err := ecosystem.RelaySend(citizen, notify, summary, beadID, "task_result", relayPayload); err != nil {
-			cmd.Printf("  Warning: relay send %s: %v\n", notify, err)
+			if policyErr := applyFailurePolicy(cmd, stepRelaySendNotify, err); policyErr != nil {
+				return policyErr
+			}
 		}
 	}
 
 	// Step 13: Agent state → idle
-	if err := ecosystem.BrAgentState(citizen, "idle"); err != nil {
-		cmd.Printf("  Warning: br agent state idle: %v\n", err)
+	if policyErr := applyFailurePolicy(cmd, stepBrAgentIdle, ecosystem.BrAgentState(citizen, "idle")); policyErr != nil {
+		return policyErr
 	}
 
 	if gateSkipped {

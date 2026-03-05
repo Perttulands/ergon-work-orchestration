@@ -128,20 +128,13 @@ func enrichFromTrace(entry *FeedEntry, tracePath string) {
 // mapOutcome maps work outcomes to learning-loop valid outcomes.
 // Learning-loop accepts: success, partial, failure, error.
 func mapOutcome(outcome string) string {
-	switch outcome {
-	case "success":
+	if outcome == "success" {
 		return "success"
-	case "gate_fail":
-		return "failure"
-	case "timeout":
-		return "error"
-	case "error":
-		return "error"
-	case "incomplete":
-		return "error"
-	default:
-		return "error"
 	}
+	if outcome == "gate_fail" {
+		return "failure"
+	}
+	return "error"
 }
 
 func parseSince(s string) (time.Time, error) {

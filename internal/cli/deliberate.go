@@ -96,7 +96,9 @@ func runDeliberate(cmd *cobra.Command, question, caseType string, participants i
 	title := fmt.Sprintf("deliberate: %s", truncate(question, 60))
 	bead, err := ecosystem.BrCreate(title, repo)
 	if err != nil {
-		cmd.Printf("  Warning: br create failed: %v\n", err)
+		if policyErr := applyFailurePolicy(cmd, stepBrCreate, err); policyErr != nil {
+			return policyErr
+		}
 	} else if bead != nil {
 		beadID = bead.ID
 		cmd.Printf("  Bead: %s (molecule)\n", beadID)

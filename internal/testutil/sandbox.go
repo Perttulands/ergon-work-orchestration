@@ -49,8 +49,8 @@ func SandboxPATH(t TB, tools map[string]string) string {
 	for name, body := range tools {
 		path := filepath.Join(binDir, name)
 		script := "#!/bin/sh\nset -e\n" + body + "\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-			t.Fatalf("write %s: %v", name, err)
+		if writeErr := os.WriteFile(path, []byte(script), 0o755); writeErr != nil {
+			t.Fatalf("write %s: %v", name, writeErr)
 		}
 	}
 

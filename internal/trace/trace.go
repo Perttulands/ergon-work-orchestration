@@ -158,7 +158,7 @@ func (t *Trace) EmitError(errMsg string) error {
 }
 
 // Close writes the end event and closes the file.
-func (t *Trace) Close(outcome string, err error) error {
+func (t *Trace) Close(outcome string, runErr error) error {
 	duration := int64(time.Since(t.started).Seconds())
 	e := Event{
 		EventType: "end",
@@ -167,8 +167,8 @@ func (t *Trace) Close(outcome string, err error) error {
 		Agent:     t.agent,
 		Bead:      t.beadID,
 	}
-	if err != nil {
-		e.Error = err.Error()
+	if runErr != nil {
+		e.Error = runErr.Error()
 	}
 	t.Emit(e)
 	return t.file.Close()

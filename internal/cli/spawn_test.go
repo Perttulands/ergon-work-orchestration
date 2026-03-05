@@ -63,3 +63,61 @@ func TestSpawnCommandInvalidRuntime(t *testing.T) {
 		t.Fatal("expected error for invalid runtime")
 	}
 }
+
+func TestSpawnCommandRelayFailureWarnsByDefault(t *testing.T) {
+	tmuxScript := `
+case "$1" in
+  has-session)  exit 1 ;;
+  new-session)  exit 0 ;;
+  send-keys)    exit 0 ;;
+  capture-pane) printf "OpenAI Codex (v0.110.0)\n› ready\n" ; exit 0 ;;
+  *)            exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux":  tmuxScript,
+		"relay": `exit 1`,
+	})
+	t.Setenv("HOME", t.TempDir())
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{"spawn", "hugo", "--repo", t.TempDir(), "--session", "agent-hugo-warn"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("spawn should continue in non-strict mode, got error: %v\noutput: %s", err, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Warning: relay register:") {
+		t.Fatalf("expected relay warning in output, got: %s", out)
+	}
+}
+
+func TestSpawnCommandRelayFailureFailsInStrictMode(t *testing.T) {
+	tmuxScript := `
+case "$1" in
+  has-session)  exit 1 ;;
+  new-session)  exit 0 ;;
+  send-keys)    exit 0 ;;
+  capture-pane) printf "OpenAI Codex (v0.110.0)\n› ready\n" ; exit 0 ;;
+  *)            exit 0 ;;
+esac
+`
+	testutil.SandboxPATH(t, map[string]string{
+		"tmux":  tmuxScript,
+		"relay": `exit 1`,
+	})
+	t.Setenv("HOME", t.TempDir())
+
+	root := NewRoot("test")
+	root.SetArgs([]string{"--strict", "spawn", "hugo", "--repo", t.TempDir(), "--session", "agent-hugo-strict"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected strict mode to fail on relay error")
+	}
+	if !strings.Contains(err.Error(), "relay register") {
+		t.Fatalf("expected relay register error, got: %v", err)
+	}
+}

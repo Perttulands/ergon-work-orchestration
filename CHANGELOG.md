@@ -13,11 +13,14 @@ All notable changes to this project will be documented in this file.
   - embedded default profile
 - Added agent-to-runtime mapping support in runtime profiles.
 - Added tests for runtime profile resolution and spawn command behavior.
+- Added centralized failure-policy module with strict-mode support (`--strict`, `WORK_STRICT=1`).
+- Added strict-mode tests for spawn behavior and policy resolution.
 
 ### Changed
 - Updated `work run` to resolve runtime from central profiles (with optional `--runtime` override).
 - Updated run record model labeling to come from runtime profile configuration.
 - Updated README with runtime profile source-of-truth documentation.
+- Updated warning/error handling in `run` and `spawn` to use centralized failure policy.
 
 ### Fixed
 - Fixed Codex launch alias collision by using `command <binary> ...` in launch commands.

@@ -17,6 +17,7 @@ The forge doesn't care about your intentions. It cares about what comes out the 
 ```bash
 work run "add JWT authentication" --repo myproject
 work spawn hugo --repo myproject     # spawn a ready worker session
+work --strict run "fix flaky auth test" --repo myproject  # fail on optional integration errors
 work context <bead-id>         # what should I know before starting this?
 work status                    # what's active right now
 work history                   # recent runs with outcomes
@@ -74,6 +75,16 @@ Profiles define:
 - optional agent-to-runtime mapping
 
 Both `work run` and `work spawn` resolve runtime from this profile chain. `--runtime` overrides only for that invocation.
+
+## Failure Policy
+
+`work` uses a centralized failure policy for orchestration steps.
+- Default mode: optional integrations degrade gracefully with warnings.
+- Strict mode: optional integration errors become hard failures.
+
+Enable strict mode with either:
+- `--strict` (global flag), or
+- `WORK_STRICT=1`
 
 ## Install
 

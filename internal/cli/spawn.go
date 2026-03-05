@@ -72,11 +72,11 @@ func runSpawn(cmd *cobra.Command, citizen, repo, session, runtime string) error 
 	}
 
 	// Best-effort visibility on relay bus.
-	if err := ecosystem.RelayRegister(citizen); err != nil {
-		cmd.Printf("  Warning: relay register: %v\n", err)
+	if policyErr := applyFailurePolicy(cmd, stepRelayRegister, ecosystem.RelayRegister(citizen)); policyErr != nil {
+		return policyErr
 	}
-	if err := ecosystem.RelayHeartbeat(citizen); err != nil {
-		cmd.Printf("  Warning: relay heartbeat: %v\n", err)
+	if policyErr := applyFailurePolicy(cmd, stepRelayHeartbeat, ecosystem.RelayHeartbeat(citizen)); policyErr != nil {
+		return policyErr
 	}
 
 	cmd.Printf("Ready: %s\n", session)
