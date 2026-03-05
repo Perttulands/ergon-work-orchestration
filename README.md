@@ -8,7 +8,7 @@
 
 In Aristotle's ethics, every thing has an *ergon* — a function, the activity it exists to perform. The ergon of a knife is to cut. The ergon of an eye is to see. The ergon of a craftsman is to take raw material and return it finished. Not faster. Not louder. *Finished.*
 
-This is the orchestration layer. A task enters as a description and a bead. Ergon gathers what you need to know (context from past work), spawns a worker (Claude Code in tmux), traces the run, gates the output, and closes the bead with the outcome. One command. Full lifecycle.
+This is the orchestration layer. A task enters as a description and a bead. Ergon gathers what you need to know (context from past work), spawns a worker (runtime profile in tmux), traces the run, gates the output, and closes the bead with the outcome. One command. Full lifecycle.
 
 The forge doesn't care about your intentions. It cares about what comes out the other side.
 
@@ -16,6 +16,7 @@ The forge doesn't care about your intentions. It cares about what comes out the 
 
 ```bash
 work run "add JWT authentication" --repo myproject
+work spawn hugo --repo myproject     # spawn a ready worker session
 work context <bead-id>         # what should I know before starting this?
 work status                    # what's active right now
 work history                   # recent runs with outcomes
@@ -33,7 +34,7 @@ description + bead
         │
         ▼
    ┌─────────┐
-   │  spawn   │  ← Claude Code worker in tmux session
+   │  spawn   │  ← runtime-profile worker in tmux session
    └────┬─────┘
         │
         ▼
@@ -57,6 +58,22 @@ description + bead
 Requires: `tmux` — workers are spawned as tmux sessions.
 Optional: `gate` — if on PATH, runs quality checks on completed work.
 Optional: `relay` — publishes run events to other agents.
+
+## Runtime Profiles (Single Source of Truth)
+
+Worker launch behavior is configured in JSON profiles, not hardcoded in Go:
+
+1. `$WORK_RUNTIME_CONFIG` (if set)
+2. `~/.work/worker_profiles.json` (if present)
+3. built-in default profile (`internal/worker/worker_profiles.default.json`)
+
+Profiles define:
+- runtime command + args (for example Codex and Claude)
+- ready/trust detection patterns
+- model label for run records
+- optional agent-to-runtime mapping
+
+Both `work run` and `work spawn` resolve runtime from this profile chain. `--runtime` overrides only for that invocation.
 
 ## Install
 

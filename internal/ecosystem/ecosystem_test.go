@@ -307,8 +307,8 @@ func TestLearningLoopDirFallback(t *testing.T) {
 func TestSelectTemplateWhenUnavailable(t *testing.T) {
 	t.Setenv("LEARNING_LOOP_DIR", t.TempDir()) // no scripts here
 	result, err := SelectTemplate("fix a bug")
-	if err != nil {
-		t.Errorf("should return nil error when unavailable, got: %v", err)
+	if err == nil {
+		t.Errorf("should return error when LEARNING_LOOP_DIR is configured but script is missing")
 	}
 	if result != nil {
 		t.Error("should return nil result when unavailable")
@@ -587,13 +587,13 @@ func TestQueryLearningLoopError(t *testing.T) {
 		"loop": `exit 1`,
 	})
 
-	// loop errors degrade gracefully — return nil, nil
+	// loop query errors should return contextual error
 	result, err := QueryLearningLoop("fix a bug")
-	if err != nil {
-		t.Errorf("QueryLearningLoop should degrade gracefully, got: %v", err)
+	if err == nil {
+		t.Error("QueryLearningLoop should return error when loop command fails")
 	}
 	if result != nil {
-		t.Error("expected nil result on graceful degradation")
+		t.Error("expected nil result on command failure")
 	}
 }
 

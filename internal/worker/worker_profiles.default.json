@@ -1,0 +1,20 @@
+{
+  "default_runtime": "codex",
+  "runtimes": {
+    "codex": {
+      "command": "codex",
+      "args": ["--ask-for-approval", "never", "--sandbox", "danger-full-access"],
+      "model": "gpt-5.3-codex",
+      "ready_patterns": ["OpenAI Codex (v", ">_ OpenAI Codex"],
+      "trust_patterns": ["trust this folder"]
+    },
+    "claude": {
+      "command": "claude",
+      "args": ["--dangerously-skip-permissions"],
+      "model": "claude-sonnet",
+      "ready_patterns": ["Claude Code v"],
+      "trust_patterns": ["trust this folder"]
+    }
+  },
+  "agents": {}
+}

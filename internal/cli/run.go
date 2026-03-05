@@ -23,6 +23,7 @@ func newRunCmd() *cobra.Command {
 		citizen  string
 		deadline time.Duration
 		notify   string
+		runtime  string
 	)
 
 	cmd := &cobra.Command{
@@ -33,7 +34,7 @@ func newRunCmd() *cobra.Command {
 2. Sets agent state to working, sends relay heartbeat
 3. Gathers context — bv search/related/plan, past beads, citizen experience
 4. Assembles a rich prompt — task + context + quality expectations
-5. Spawns a Claude Code worker in tmux
+5. Spawns a worker runtime (codex/claude) in tmux
 6. Opens a trace — timestamped JSONL events
 7. On completion: gate check, close trace, derive close reason
 8. Records experience, sends relay notifications
@@ -41,19 +42,20 @@ func newRunCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			task := args[0]
-			return runTask(cmd, task, repo, citizen, deadline, notify)
+			return runTask(cmd, task, repo, citizen, deadline, notify, runtime)
 		},
 	}
 
 	cmd.Flags().StringVar(&repo, "repo", "", "repository path (default: cwd)")
 	cmd.Flags().StringVar(&citizen, "citizen", "", "citizen name (default: worker)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "worker runtime profile (default from runtime config)")
 	cmd.Flags().DurationVar(&deadline, "deadline", 30*time.Minute, "max time for the worker")
 	cmd.Flags().StringVar(&notify, "notify", "", "agent to notify on completion (in addition to athena)")
 
 	return cmd
 }
 
-func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Duration, notify string) error {
+func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Duration, notify, runtime string) error {
 	// Defaults
 	if repo == "" {
 		wd, err := os.Getwd()
@@ -66,6 +68,11 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		citizen = "worker"
 	}
 
+	resolvedRuntime, rtErr := worker.ResolveRuntime(runtime, citizen)
+	if rtErr != nil {
+		return rtErr
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("get home dir: %w", err)
@@ -73,7 +80,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	workDir := filepath.Join(home, ".work")
 
 	cmd.Printf("Starting: %s\n", task)
-	cmd.Printf("  Citizen: %s | Repo: %s | Deadline: %s\n", citizen, repo, deadline)
+	cmd.Printf("  Citizen: %s | Repo: %s | Runtime: %s | Deadline: %s\n", citizen, repo, resolvedRuntime, deadline)
 
 	// Pre-flight: check tool availability and warn about degradation
 	degradation := checkTools()
@@ -103,6 +110,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	// Step 1b: Agent state → working + relay heartbeat
 	if err := ecosystem.BrAgentState(citizen, "working"); err != nil {
 		cmd.Printf("  Warning: br agent state: %v\n", err)
+	}
+	if err := ecosystem.RelayRegister(citizen); err != nil {
+		cmd.Printf("  Warning: relay register: %v\n", err)
 	}
 	if err := ecosystem.RelayHeartbeat(citizen); err != nil {
 		cmd.Printf("  Warning: relay heartbeat: %v\n", err)
@@ -142,6 +152,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		Prompt:      prompt,
 		Deadline:    deadline,
 		AgentName:   citizen,
+		Runtime:     resolvedRuntime,
 	})
 
 	outcome := "success"
@@ -208,7 +219,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	}
 
 	// Step 8: Learning-loop feedback collection
-	feedbackRecord := buildRunRecord(beadID, citizen, outcome, durationS, gateResult, ctx)
+	feedbackRecord := buildRunRecord(beadID, citizen, resolvedRuntime, outcome, durationS, gateResult, ctx)
 	if fbErr := ecosystem.CollectFeedback(feedbackRecord, workDir); fbErr != nil {
 		cmd.Printf("  Warning: feedback collection failed: %v\n", fbErr)
 	}
@@ -405,11 +416,11 @@ func checkTools() []toolDegradation {
 }
 
 // buildRunRecord maps work run outcome data to the format expected by feedback-collector.sh.
-func buildRunRecord(beadID, citizen, outcome string, durationS int64, gate *ecosystem.GateResult, ctx *workctx.Result) ecosystem.RunRecord {
+func buildRunRecord(beadID, citizen, runtime, outcome string, durationS int64, gate *ecosystem.GateResult, ctx *workctx.Result) ecosystem.RunRecord {
 	rec := ecosystem.RunRecord{
 		Bead:            beadID,
 		Agent:           citizen,
-		Model:           "claude-sonnet",
+		Model:           worker.ModelForRuntime(runtime, citizen),
 		TemplateName:    "custom",
 		Attempt:         1,
 		DurationSeconds: durationS,

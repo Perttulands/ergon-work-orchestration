@@ -469,7 +469,8 @@ func TestWaitForReadyBanner(t *testing.T) {
 	// Pre-create session with banner already visible
 	fake.addSession(name, "/tmp", "Claude Code v1.2.3\n❯ ")
 
-	if err := waitForReady(name, 100*time.Millisecond); err != nil {
+	profile := runtimeSpec{ReadyPatterns: []string{"Claude Code v"}, TrustPatterns: []string{"trust this folder"}}
+	if err := waitForReady(name, "claude", profile, 100*time.Millisecond); err != nil {
 		t.Fatalf("waitForReady should succeed: %v", err)
 	}
 }
@@ -481,7 +482,8 @@ func TestWaitForReadyTimeout(t *testing.T) {
 	// Session with no banner — should time out
 	fake.addSession(name, "/tmp", "Loading...")
 
-	err := waitForReady(name, 50*time.Millisecond)
+	profile := runtimeSpec{ReadyPatterns: []string{"Claude Code v"}, TrustPatterns: []string{"trust this folder"}}
+	err := waitForReady(name, "claude", profile, 50*time.Millisecond)
 	if err == nil {
 		t.Error("waitForReady should time out")
 	}
@@ -503,7 +505,8 @@ func TestWaitForReadyTrustDismissal(t *testing.T) {
 	}
 	fake.mu.Unlock()
 
-	if err := waitForReady(name, 100*time.Millisecond); err != nil {
+	profile := runtimeSpec{ReadyPatterns: []string{"Claude Code v"}, TrustPatterns: []string{"trust this folder"}}
+	if err := waitForReady(name, "claude", profile, 100*time.Millisecond); err != nil {
 		t.Fatalf("waitForReady should succeed after trust dismissal: %v", err)
 	}
 }
@@ -511,7 +514,8 @@ func TestWaitForReadyTrustDismissal(t *testing.T) {
 func TestWaitForReadyCaptureError(t *testing.T) {
 	useFake(t)
 	// Non-existent session — capturePane will fail
-	err := waitForReady("nonexistent-session", 50*time.Millisecond)
+	profile := runtimeSpec{ReadyPatterns: []string{"Claude Code v"}, TrustPatterns: []string{"trust this folder"}}
+	err := waitForReady("nonexistent-session", "claude", profile, 50*time.Millisecond)
 	if err == nil {
 		t.Error("waitForReady should fail on non-existent session")
 	}

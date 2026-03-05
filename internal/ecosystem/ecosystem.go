@@ -258,6 +258,22 @@ func RelayHeartbeat(agent string) error {
 	return nil
 }
 
+// RelayRegister registers an agent identity on the relay bus.
+// Returns nil if relay is not available.
+func RelayRegister(agent string) error {
+	if !Available("relay") {
+		return nil
+	}
+	if strings.TrimSpace(agent) == "" {
+		return nil
+	}
+	cmd := exec.Command("relay", "register", agent)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("relay register %s: %s: %w", agent, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // RelaySend sends a message from one agent to another, optionally threaded.
 // msgType and payload are optional — pass empty strings to omit.
 // Returns nil if relay is not available.
@@ -379,9 +395,7 @@ func SelectTemplate(task string) (*TemplateSelection, error) {
 
 	script := filepath.Join(dir, "scripts", "select-template.sh")
 	if _, err := os.Stat(script); err != nil {
-		// Graceful degradation: learning-loop dir exists but script is missing
-		log.Printf("warning: select-template.sh not found: %v", err)
-		return nil, nil
+		return nil, fmt.Errorf("select-template script missing at %s: %w", script, err)
 	}
 
 	cmd := exec.Command("bash", script, task)
@@ -409,8 +423,7 @@ func QueryLearningLoop(task string) ([]byte, error) {
 	cmd := exec.Command("loop", "query", task, "--json")
 	out, err := cmd.Output()
 	if err != nil {
-		log.Printf("warning: loop query failed: %v", err)
-		return nil, nil // graceful degradation — loop may not have data yet
+		return nil, fmt.Errorf("loop query %q: %w", task, err)
 	}
 	return out, nil
 }

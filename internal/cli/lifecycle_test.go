@@ -174,7 +174,7 @@ esac`,
 
 	// 7. Build run record
 	gateResult := &ecosystem.GateResult{Pass: true, Score: 0.95}
-	rec := buildRunRecord(beadID, "pipeline-agent", "success", meta.DurationS, gateResult, ctx)
+	rec := buildRunRecord(beadID, "pipeline-agent", "codex", "success", meta.DurationS, gateResult, ctx)
 	if rec.Status != "done" {
 		t.Errorf("status = %q", rec.Status)
 	}
@@ -261,7 +261,7 @@ func TestDegradedPipelineIntegration(t *testing.T) {
 	idx.Close()
 
 	// Run record still builds correctly
-	rec := buildRunRecord("degraded-test", "degraded", "success", 60, nil, nil)
+	rec := buildRunRecord("degraded-test", "degraded", "codex", "success", 60, nil, nil)
 	if rec.Status != "done" {
 		t.Errorf("status = %q, want done", rec.Status)
 	}

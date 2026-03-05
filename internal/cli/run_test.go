@@ -101,7 +101,7 @@ func TestRunCommandFlags(t *testing.T) {
 	}
 
 	// Check flags exist
-	flags := []string{"repo", "citizen", "deadline", "notify"}
+	flags := []string{"repo", "citizen", "runtime", "deadline", "notify"}
 	for _, name := range flags {
 		if runCmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected flag --%s to exist", name)
@@ -114,7 +114,7 @@ func TestBuildRunRecordSuccess(t *testing.T) {
 	ctx := &workctx.Result{
 		TemplateSelection: &ecosystem.TemplateSelection{TaskType: "bug-fix"},
 	}
-	rec := buildRunRecord("bead-1", "mercury", "success", 120, gate, ctx)
+	rec := buildRunRecord("bead-1", "mercury", "codex", "success", 120, gate, ctx)
 
 	if rec.Bead != "bead-1" {
 		t.Errorf("bead = %q, want bead-1", rec.Bead)
@@ -138,7 +138,7 @@ func TestBuildRunRecordSuccess(t *testing.T) {
 
 func TestBuildRunRecordGateFail(t *testing.T) {
 	gate := &ecosystem.GateResult{Pass: false, Score: 0.3}
-	rec := buildRunRecord("bead-2", "worker", "gate_fail", 60, gate, nil)
+	rec := buildRunRecord("bead-2", "worker", "codex", "gate_fail", 60, gate, nil)
 
 	if rec.Status != "done" {
 		t.Errorf("status = %q, want done", rec.Status)
@@ -152,7 +152,7 @@ func TestBuildRunRecordGateFail(t *testing.T) {
 }
 
 func TestBuildRunRecordTimeout(t *testing.T) {
-	rec := buildRunRecord("bead-3", "worker", "timeout", 1800, nil, nil)
+	rec := buildRunRecord("bead-3", "worker", "codex", "timeout", 1800, nil, nil)
 
 	if rec.Status != "timeout" {
 		t.Errorf("status = %q, want timeout", rec.Status)
@@ -163,7 +163,7 @@ func TestBuildRunRecordTimeout(t *testing.T) {
 }
 
 func TestBuildRunRecordError(t *testing.T) {
-	rec := buildRunRecord("bead-4", "worker", "error", 30, nil, nil)
+	rec := buildRunRecord("bead-4", "worker", "codex", "error", 30, nil, nil)
 
 	if rec.Status != "failed" {
 		t.Errorf("status = %q, want failed", rec.Status)
@@ -633,4 +633,3 @@ func TestLintBeforeDispatch_BeadAllBad(t *testing.T) {
 		t.Errorf("expected >= 4 errors, got %d: %s", errors, beadlint.FormatIssues(issues))
 	}
 }
-

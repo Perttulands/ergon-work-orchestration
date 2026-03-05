@@ -1,4 +1,4 @@
-// Package worker handles tmux-based Claude Code worker spawning.
+// Package worker handles tmux-based worker spawning.
 package worker
 
 import (
@@ -40,6 +40,7 @@ type Config struct {
 	Prompt      string        // the assembled task prompt to send
 	Deadline    time.Duration // max time before killing the session
 	AgentName   string        // relay identity (sets RELAY_AGENT env var)
+	Runtime     string        // worker runtime profile: codex, claude (default: codex)
 }
 
 // Result holds the outcome of a worker run.
@@ -53,52 +54,18 @@ type Result struct {
 
 // Spawn creates a tmux session, starts claude, sends the prompt, and waits for completion.
 func Spawn(cfg Config) (*Result, error) {
-	if err := requireTmux(); err != nil {
-		return nil, fmt.Errorf("spawn: %w", err)
-	}
-	if cfg.SessionName == "" {
-		return nil, fmt.Errorf("session name required")
-	}
-	if cfg.WorkDir == "" {
-		return nil, fmt.Errorf("work directory required")
+	result, runtime, err := startSession(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("spawn worker session: %w", err)
 	}
 
-	result := &Result{
-		SessionName: cfg.SessionName,
-		Started:     time.Now(),
-	}
-
-	// 1. Create tmux session
-	if err := createSession(cfg.SessionName, cfg.WorkDir); err != nil {
-		return nil, fmt.Errorf("create session: %w", err)
-	}
-
-	// 2. Unset CLAUDECODE (critical — nested sessions crash otherwise)
-	if err := sendKeys(cfg.SessionName, "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT ANTHROPIC_API_KEY_PARENT"); err != nil {
-		killSession(cfg.SessionName)
-		return nil, fmt.Errorf("unset env: %w", err)
-	}
-	time.Sleep(spawnEnvSetupDelay)
-
-	// 2b. Set RELAY_AGENT so the worker identifies correctly on the relay bus
-	if cfg.AgentName != "" {
-		if err := sendKeys(cfg.SessionName, fmt.Sprintf("export RELAY_AGENT=%s", cfg.AgentName)); err != nil {
-			killSession(cfg.SessionName)
-			return nil, fmt.Errorf("set relay agent: %w", err)
+	// For spawn-only workflows we allow an empty prompt and return once the
+	// session is ready.
+	if strings.TrimSpace(cfg.Prompt) == "" {
+		if output, capErr := capturePane(cfg.SessionName); capErr == nil {
+			result.Output = output
 		}
-		time.Sleep(spawnEnvSetupDelay)
-	}
-
-	// 3. Launch claude --dangerously-skip-permissions
-	if err := sendKeys(cfg.SessionName, "claude --dangerously-skip-permissions"); err != nil {
-		killSession(cfg.SessionName)
-		return nil, fmt.Errorf("launch claude: %w", err)
-	}
-
-	// 4. Wait for claude to be ready (60s allows for trust dialog + slow startup)
-	if err := waitForReady(cfg.SessionName, 60*time.Second); err != nil {
-		killSession(cfg.SessionName)
-		return nil, fmt.Errorf("wait for ready: %w", err)
+		return result, nil
 	}
 
 	// 5. Send the task prompt
@@ -126,7 +93,11 @@ func Spawn(cfg Config) (*Result, error) {
 	}
 
 	// 7. Monitor for completion
-	output := waitForCompletion(cfg.SessionName, cfg.Deadline+time.Minute)
+	maxWait := 30 * time.Minute
+	if cfg.Deadline > 0 {
+		maxWait = cfg.Deadline + time.Minute
+	}
+	output := waitForCompletion(cfg.SessionName, maxWait)
 	close(done)
 
 	mu.Lock()
@@ -135,7 +106,81 @@ func Spawn(cfg Config) (*Result, error) {
 	result.Finished = time.Now()
 	result.Output = output
 
+	_ = runtime // resolved in startSession; kept here for clarity in call flow.
 	return result, nil
+}
+
+// Start creates a tmux session, launches the runtime, and waits until ready.
+// It does not send a prompt or wait for task completion.
+func Start(cfg Config) (*Result, error) {
+	result, _, err := startSession(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("start worker session: %w", err)
+	}
+	if output, capErr := capturePane(cfg.SessionName); capErr == nil {
+		result.Output = output
+	}
+	return result, nil
+}
+
+func startSession(cfg Config) (*Result, string, error) {
+	runtime, runtimeProfile, err := resolveRuntimeProfile(cfg.Runtime, cfg.AgentName)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve runtime profile: %w", err)
+	}
+
+	if err := requireTmux(); err != nil {
+		return nil, "", fmt.Errorf("spawn: %w", err)
+	}
+	if cfg.SessionName == "" {
+		return nil, "", fmt.Errorf("session name required")
+	}
+	if cfg.WorkDir == "" {
+		return nil, "", fmt.Errorf("work directory required")
+	}
+
+	result := &Result{
+		SessionName: cfg.SessionName,
+		Started:     time.Now(),
+	}
+
+	// 1. Create tmux session
+	if err := createSession(cfg.SessionName, cfg.WorkDir); err != nil {
+		return nil, "", fmt.Errorf("create session: %w", err)
+	}
+
+	// 2. Unset CLAUDECODE (critical — nested sessions crash otherwise)
+	if err := sendKeys(cfg.SessionName, "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT ANTHROPIC_API_KEY_PARENT"); err != nil {
+		killSession(cfg.SessionName)
+		return nil, "", fmt.Errorf("unset env: %w", err)
+	}
+	time.Sleep(spawnEnvSetupDelay)
+
+	// 2b. Set RELAY_AGENT so the worker identifies correctly on the relay bus
+	if cfg.AgentName != "" {
+		if err := sendKeys(cfg.SessionName, fmt.Sprintf("export RELAY_AGENT=%s", cfg.AgentName)); err != nil {
+			killSession(cfg.SessionName)
+			return nil, "", fmt.Errorf("set relay agent: %w", err)
+		}
+		time.Sleep(spawnEnvSetupDelay)
+	}
+
+	launchCmd, cmdErr := buildLaunchCommand(runtimeProfile)
+	if cmdErr != nil {
+		killSession(cfg.SessionName)
+		return nil, "", cmdErr
+	}
+	if err := sendKeys(cfg.SessionName, launchCmd); err != nil {
+		killSession(cfg.SessionName)
+		return nil, "", fmt.Errorf("launch %s: %w", runtime, err)
+	}
+
+	// 4. Wait for the runtime to be ready (60s allows for trust dialog + slow startup)
+	if err := waitForReady(cfg.SessionName, runtime, runtimeProfile, 60*time.Second); err != nil {
+		killSession(cfg.SessionName)
+		return nil, "", fmt.Errorf("wait for ready: %w", err)
+	}
+	return result, runtime, nil
 }
 
 // KillSession terminates a tmux session.
@@ -150,7 +195,7 @@ func SessionExists(name string) bool {
 
 // --- package-level delegators to backend ---
 
-func requireTmux() error                              { return backend.requireTmux() }
+func requireTmux() error                               { return backend.requireTmux() }
 func createSession(name, workDir string) error         { return backend.createSession(name, workDir) }
 func sendKeys(session, keys string) error              { return backend.sendKeys(session, keys) }
 func sendKeysRaw(session string, keys ...string) error { return backend.sendKeysRaw(session, keys...) }
@@ -262,16 +307,33 @@ const (
 
 // detectReady inspects captured pane output and returns the ready state.
 func detectReady(output string) readyState {
-	if strings.Contains(output, "Claude Code v") {
+	return detectReadyWithPatterns(output, []string{"Claude Code v", "OpenAI Codex (v", ">_ OpenAI Codex"}, []string{"trust this folder"})
+}
+
+func detectReadyWithPatterns(output string, readyPatterns, trustPatterns []string) readyState {
+	for _, p := range readyPatterns {
+		if p != "" && strings.Contains(output, p) {
+			return readyOK
+		}
+	}
+	lower := strings.ToLower(output)
+	for _, p := range trustPatterns {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p != "" && strings.Contains(lower, p) {
+			return readyNeedTrust
+		}
+	}
+	// Backward-compatible fallback when config patterns are missing.
+	if strings.Contains(output, "Claude Code v") || strings.Contains(output, "OpenAI Codex (v") {
 		return readyOK
 	}
-	if strings.Contains(output, "trust this folder") {
+	if strings.Contains(lower, "trust this folder") {
 		return readyNeedTrust
 	}
 	return readyNotYet
 }
 
-func waitForReady(session string, timeout time.Duration) error {
+func waitForReady(session, runtime string, profile runtimeSpec, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	trustDismissed := false
 	for time.Now().Before(deadline) {
@@ -280,21 +342,20 @@ func waitForReady(session string, timeout time.Duration) error {
 			return fmt.Errorf("wait for ready: %w", err)
 		}
 
-		switch detectReady(output) {
-		case readyOK:
+		state := detectReadyWithPatterns(output, profile.ReadyPatterns, profile.TrustPatterns)
+		if state == readyOK {
 			return nil
-		case readyNeedTrust:
-			if !trustDismissed {
-				_ = sendKeysRaw(session, "Enter")
-				trustDismissed = true
-				time.Sleep(readySleepAfterTrust)
-				continue
-			}
+		}
+		if state == readyNeedTrust && !trustDismissed {
+			_ = sendKeysRaw(session, "Enter")
+			trustDismissed = true
+			time.Sleep(readySleepAfterTrust)
+			continue
 		}
 
 		time.Sleep(readyPollInterval)
 	}
-	return fmt.Errorf("timed out waiting for claude to start (session: %s)", session)
+	return fmt.Errorf("timed out waiting for %s to start (session: %s)", runtime, session)
 }
 
 // detectCompletion checks if pane output indicates the worker is done.
@@ -313,7 +374,7 @@ func detectCompletion(output string) bool {
 		start = 0
 	}
 	for _, line := range lines[start:] {
-		if strings.HasPrefix(strings.TrimSpace(line), "❯") {
+		if isPromptLine(strings.TrimSpace(line)) {
 			return !isStillWorking(output)
 		}
 	}
@@ -362,7 +423,7 @@ func isStillWorking(output string) bool {
 	for _, line := range lines[start:] {
 		trimmed := strings.TrimSpace(line)
 		// Skip the ❯ line itself and lines below it
-		if strings.HasPrefix(trimmed, "❯") {
+		if isPromptLine(trimmed) {
 			break
 		}
 		for _, ind := range workingIndicators {
@@ -372,4 +433,8 @@ func isStillWorking(output string) bool {
 		}
 	}
 	return false
+}
+
+func isPromptLine(line string) bool {
+	return strings.HasPrefix(line, "❯") || strings.HasPrefix(line, "›")
 }
