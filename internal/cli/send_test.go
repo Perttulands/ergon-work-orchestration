@@ -32,6 +32,19 @@ esac
 `
 }
 
+func tmuxMockRequireTMPDIR() string {
+	return `#!/bin/bash
+if [ "${TMUX_TMPDIR}" != "${EXPECT_TMUX_TMPDIR}" ]; then
+  exit 7
+fi
+case "$1" in
+  has-session) exit 0 ;;
+  send-keys)   exit 0 ;;
+  *)           exit 0 ;;
+esac
+`
+}
+
 func TestSendCommandExists(t *testing.T) {
 	root := NewRoot("test")
 	found := false
@@ -80,6 +93,36 @@ func TestSendCommandWithFile(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Sent prompt to session agent-hugo") {
 		t.Fatalf("expected confirmation, got: %s", buf.String())
+	}
+}
+
+func TestSendCommandPromptAndFileConflict(t *testing.T) {
+	promptFile := filepath.Join(t.TempDir(), "prompt.md")
+	if err := os.WriteFile(promptFile, []byte("hello from file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := NewRoot("test")
+	root.SetArgs([]string{"send", "agent-hugo", "hello", "--file", promptFile})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when both prompt args and --file are provided")
+	}
+	if !strings.Contains(err.Error(), "not both") {
+		t.Fatalf("expected conflict error, got: %v", err)
+	}
+}
+
+func TestSendCommandRespectsTMUXTMPDIR(t *testing.T) {
+	t.Setenv("TMUX_TMPDIR", "/tmp/work-tmux-dir")
+	t.Setenv("EXPECT_TMUX_TMPDIR", "/tmp/work-tmux-dir")
+	testutil.SandboxPATH(t, map[string]string{"tmux": tmuxMockRequireTMPDIR()})
+
+	root := NewRoot("test")
+	root.SetArgs([]string{"send", "agent-hugo", "hello"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("send should respect TMUX_TMPDIR, got: %v", err)
 	}
 }
 
