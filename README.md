@@ -1,32 +1,69 @@
-# work
+# Ergon
 
-`work` is a Go CLI orchestration tool for Polis agent execution lifecycle management. It creates and tracks work beads, gathers contextual memory from prior runs, spawns runtime worker sessions in `tmux`, records JSONL traces, indexes run metadata in SQLite, performs optional quality gating and ecosystem signaling, supports governance flows via `deliberate` and `decide`, and exports structured learning-loop feed data. Optional integrations degrade gracefully when external tools are absent.
+![Ergon](images/ergon.jpg)
 
-## Installation
+*A forge-scarred hand on the bellows. The other holds a manifest. Every task enters raw. Every task leaves shaped.*
 
-```sh
-# From source
-cd /path/to/work
-go build -o work ./cmd/work
+---
 
-# Or install to GOBIN
-go install ./cmd/work
+Ergon is a task orchestrator for AI coding agents. You give it a task description and it handles everything around the actual work: gathering context from past runs, spawning a worker session in tmux, tracing what happens, checking quality on the way out, and closing the loop. One command takes a task from "somebody should do this" to "done, here's the record." It's the part of the workshop that isn't the hammer — it's the bench, the vise, the logbook.
+
+In Aristotle's ethics, every thing has an *ergon* — a function, the activity it exists to perform. The ergon of a knife is to cut. The ergon of an eye is to see. The ergon of a craftsman is to take raw material and return it finished. Not faster. Not louder. *Finished.*
+
+The forge doesn't care about your intentions. It cares about what comes out the other side.
+
+## Quick CLI
+
+```bash
+work run "add JWT authentication" --repo myproject
+work spawn hugo --repo myproject     # spawn a ready worker session
+work send agent-hugo "now fix the tests"  # inject a prompt into a running session
+work --strict run "fix flaky auth test" --repo myproject  # fail on optional integration errors
+work context <bead-id>         # what should I know before starting this?
+work status                    # what's active right now
+work history                   # recent runs with outcomes
+work trace <bead-id>           # replay a run's timeline
+work feed --since 24h          # structured JSONL for learning-loop
+work deliberate "should we split the auth module?" --type architecture
+work decide "approve deploy?" --evidence pol-abc1,pol-abc2
 ```
 
-## Quick Start
+## Lifecycle
 
-```sh
-# Run a task with full lifecycle
-work run "pol-abc1" --citizen hestia
+```
+description + bead
+       │
+       ▼
+   ┌─────────┐
+   │ context  │  ← past work, relevant beads, cass memory
+   └────┬─────┘
+        │
+        ▼
+   ┌─────────┐
+   │  spawn   │  ← runtime-profile worker in tmux session
+   └────┬─────┘
+        │
+        ▼
+   ┌─────────┐
+   │  trace   │  ← capture run output, decisions, errors
+   └────┬─────┘
+        │
+        ▼
+   ┌─────────┐
+   │   gate   │  ← quality check (Cerberus, if on PATH)
+   └────┬─────┘
+        │
+        ▼
+   ┌─────────┐
+   │  close   │  ← bead closed with outcome + trace
+   └─────────┘
+```
 
-# Check active sessions
-work status
+## Install
 
-# View recent runs
-work history
-
-# Gather context for a bead before starting manually
-work context pol-abc1 --repo /path/to/repo
+```bash
+go build -o work ./cmd/work/
+mv work ~/.local/bin/
 ```
 
 ## CLI Commands
@@ -72,6 +109,21 @@ work spawn <citizen> [flags]
 | `--repo` | cwd | Repository path |
 | `--session` | `agent-<citizen>` | tmux session name |
 | `--runtime` | (profile default) | Worker runtime profile override |
+
+---
+
+### `work send <session> <prompt>`
+
+Inject a prompt into a running tmux worker session via `tmux send-keys`.
+
+```
+work send <session> <prompt> [flags]
+work send <session> --file prompt.txt
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--file` | `` | Read prompt from file instead of args |
 
 ---
 
@@ -208,22 +260,15 @@ work completion zsh [--no-descriptions]
 
 ## Configuration
 
-### Environment Variables
+### Runtime Profiles
 
-| Variable | Description |
-|----------|-------------|
-| `WORK_STRICT` | Enable strict failure mode when set to `1`, `true`, `yes`, or `on` |
-| `WORK_RUNTIME_CONFIG` | Path to runtime profile JSON file (highest priority) |
-| `LEARNING_LOOP_DIR` | Base directory for learning-loop scripts; falls back to `~/tools/learning-loop` |
-| `HOME` | Used for all `~/.work` paths and fallback runtime config location |
+Worker launch behavior is configured in JSON profiles, not hardcoded:
 
-### Runtime Profile Resolution Order
+1. `$WORK_RUNTIME_CONFIG` (if set)
+2. `~/.work/worker_profiles.json` (if present)
+3. Built-in default profile
 
-1. File path in `WORK_RUNTIME_CONFIG`
-2. `~/.work/worker_profiles.json`
-3. Embedded default profile (`codex` and `claude` runtimes)
-
-### Runtime Profile Schema
+Profiles define runtime command + args, ready/trust detection patterns, model label, and optional agent-to-runtime mapping.
 
 ```json
 {
@@ -243,9 +288,24 @@ work completion zsh [--no-descriptions]
 }
 ```
 
-The embedded default profile defines:
+The built-in default defines two runtimes:
 - `codex`: runs `codex --dangerously-bypass-approvals-and-sandbox`, model `gpt-5.3-codex`
 - `claude`: runs `claude --dangerously-skip-permissions`, model `claude-sonnet`
+
+Both `work run` and `work spawn` resolve runtime from this profile chain. `--runtime` overrides only for that invocation.
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `WORK_STRICT` | Enable strict failure mode when set to `1`, `true`, `yes`, or `on` |
+| `WORK_RUNTIME_CONFIG` | Path to runtime profile JSON file (highest priority) |
+| `LEARNING_LOOP_DIR` | Base directory for learning-loop scripts; falls back to `~/tools/learning-loop` |
+| `HOME` | Used for all `~/.work` paths and fallback runtime config location |
+
+### Failure Policy
+
+Default mode: optional integrations degrade gracefully with warnings. Strict mode (`--strict` or `WORK_STRICT=1`): optional integration errors become hard failures.
 
 ### Filesystem Layout
 
@@ -259,10 +319,6 @@ The embedded default profile defines:
 | `~/.work/feedback/<bead>.json` | Feedback collector output |
 | `~/.work/senate-cases/senate-<bead>.json` | Senate deliberation case files |
 
-### Strict Mode
-
-Strict mode turns fail-open optional integration steps into hard failures. Enable via `--strict` flag or `WORK_STRICT=1`. Without strict mode, missing optional tools emit warnings and execution continues.
-
 ## Dependencies
 
 ### Required
@@ -271,7 +327,7 @@ Strict mode turns fail-open optional integration steps into hard failures. Enabl
 |------|---------|
 | `tmux` | Worker session management and status |
 
-### Optional
+### Optional (degrade gracefully)
 
 | Tool | Purpose |
 |------|---------|
@@ -282,9 +338,7 @@ Strict mode turns fail-open optional integration steps into hard failures. Enabl
 | `loop` | Learning-loop query and run ingest |
 | `senate` | Deliberation and handoff workflows (`work deliberate`) |
 
-### Supporting Commands
-
-`git` (repo history and diff stat), `bash` (learning-loop scripts), and the runtime binaries configured in worker profiles (`codex`, `claude` by default) are also invoked during normal operation.
+`git`, `bash`, and the runtime binaries configured in worker profiles (`codex`, `claude` by default) are also invoked during normal operation.
 
 ### Go Module Dependencies
 
@@ -292,9 +346,40 @@ Strict mode turns fail-open optional integration steps into hard failures. Enabl
 - `modernc.org/sqlite v1.46.1` — Pure-Go SQLite driver for run index
 - `github.com/google/uuid v1.6.0`, `github.com/dustin/go-humanize v1.0.1` — Utilities
 
-## Current Status / Limitations
+## Current Status
 
-- `BrAgentState` calls (set agent working/idle state) are currently no-ops by design.
-- The `deep` gate level (when using `gate`) includes a `risk` gate that always passes with the message `risk scoring not yet implemented`.
-- The learning-loop template selection relies on an external `select-template.sh` script; if absent, that context source is skipped.
-- The SQLite index auto-rebuilds from trace JSONL files when the DB is empty, but individual corrupted trace lines are skipped during rebuild.
+✅ Full run lifecycle: context gather, spawn, trace, gate, close
+✅ Runtime profiles with fallback chain (env var, user config, built-in default)
+✅ JSONL trace capture with SQLite index and auto-rebuild
+✅ Strict mode for CI/production use
+✅ `send` command for prompt injection into running sessions
+✅ `deliberate` and `decide` governance flows
+✅ `feed` export for learning-loop consumption
+✅ Shell completions (bash, zsh, fish, powershell)
+
+⚠️ `BrAgentState` calls (set agent working/idle state) are no-ops by design
+⚠️ The `deep` gate level includes a `risk` gate that always passes — risk scoring not yet implemented
+⚠️ Learning-loop template selection relies on an external `select-template.sh` script; skipped if absent
+⚠️ SQLite index rebuild skips individually corrupted trace lines
+
+## Part of Polis
+
+Ergon is the doing-layer of the city. It doesn't exist alone.
+
+- [Chiron](https://github.com/Perttulands/chiron-trainer) — trains the agents
+- [Cerberus](https://github.com/Perttulands/cerberus-gate) — guards the gate
+- [Hermes](https://github.com/Perttulands/hermes-relay) — carries the messages
+- [Senate](https://github.com/Perttulands/senate) — deliberation and governance
+- [Learning Loop](https://github.com/Perttulands/learning-loop) — memory across runs
+- [Beads](https://github.com/Perttulands/beads-polis) — work unit tracking
+- [Truthsayer](https://github.com/Perttulands/truthsayer) — verification
+- [Horkos](https://github.com/Perttulands/horkos-oathkeeper) — oath enforcement
+- [Argus](https://github.com/Perttulands/argus-watcher) — observation
+- [UBS](https://github.com/Perttulands/ultimate_bug_scanner) — bug scanning
+- [Polis Utils](https://github.com/Perttulands/polis-utils) — shared utilities
+
+See `PRD.md` for full design details.
+
+## License
+
+MIT

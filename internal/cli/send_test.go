@@ -10,12 +10,11 @@ import (
 	"polis/work/internal/testutil"
 )
 
-// These tests use SandboxPATH to mock tmux, which the worker package
-// calls via exec.Command. The worker.SendPrompt path uses:
+// These tests mock the tmux binary via SandboxPATH and exercise the send
+// command path that uses:
 // 1. tmux has-session -t <session>
-// 2. tmux load-buffer <tmpfile>
-// 3. tmux paste-buffer -t <session>
-// 4. tmux send-keys -t <session> Enter (twice with delay)
+// 2. tmux send-keys -t <session> -l <prompt>
+// 3. tmux send-keys -t <session> Enter
 
 func tmuxMockAcceptAll() string {
 	return `#!/bin/bash
