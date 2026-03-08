@@ -506,7 +506,7 @@ func TestWaitForReadyTrustDismissal(t *testing.T) {
 	fake.mu.Unlock()
 
 	profile := runtimeSpec{ReadyPatterns: []string{"Claude Code v"}, TrustPatterns: []string{"trust this folder"}}
-	if err := waitForReady(name, "claude", profile, 100*time.Millisecond); err != nil {
+	if err := waitForReady(name, "claude", profile, 2*time.Second); err != nil {
 		t.Fatalf("waitForReady should succeed after trust dismissal: %v", err)
 	}
 }

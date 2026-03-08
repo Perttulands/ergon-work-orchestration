@@ -193,6 +193,11 @@ func SessionExists(name string) bool {
 	return backend.sessionExists(name)
 }
 
+// SendPrompt injects a prompt into a running tmux session using load-buffer + paste-buffer.
+func SendPrompt(session, prompt string) error {
+	return backend.sendPrompt(session, prompt)
+}
+
 // --- package-level delegators to backend ---
 
 func requireTmux() error                               { return backend.requireTmux() }
@@ -223,11 +228,18 @@ func (r *realTmux) createSession(name, workDir string) error {
 }
 
 func (r *realTmux) sendKeys(session, keys string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", session, keys, "Enter")
+	cmd := exec.Command("tmux", "send-keys", "-t", session, keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
-	return nil
+	// Delay before Enter to let the TUI process pasted content
+	time.Sleep(200 * time.Millisecond)
+	// Double Enter — second is a no-op safety net for TUIs that sometimes miss the first
+	if err := r.sendKeysRaw(session, "Enter"); err != nil {
+		return err
+	}
+	time.Sleep(100 * time.Millisecond)
+	return r.sendKeysRaw(session, "Enter")
 }
 
 func (r *realTmux) sendKeysRaw(session string, keys ...string) error {
@@ -268,7 +280,15 @@ func (r *realTmux) sendPrompt(session, prompt string) error {
 		return fmt.Errorf("paste-buffer: %s: %s", err, out)
 	}
 
-	// Send Enter to submit the prompt
+	// Small delay to let the TUI process the pasted content before Enter
+	time.Sleep(200 * time.Millisecond)
+
+	// Send Enter twice — first submits the prompt, second is a no-op safety net
+	// (hitting Enter on an empty prompt field does nothing in Codex/Claude)
+	if err := r.sendKeysRaw(session, "Enter"); err != nil {
+		return err
+	}
+	time.Sleep(100 * time.Millisecond)
 	return r.sendKeysRaw(session, "Enter")
 }
 
@@ -347,6 +367,8 @@ func waitForReady(session, runtime string, profile runtimeSpec, timeout time.Dur
 			return nil
 		}
 		if state == readyNeedTrust && !trustDismissed {
+			_ = sendKeysRaw(session, "Enter")
+			time.Sleep(100 * time.Millisecond)
 			_ = sendKeysRaw(session, "Enter")
 			trustDismissed = true
 			time.Sleep(readySleepAfterTrust)
