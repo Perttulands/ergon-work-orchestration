@@ -24,6 +24,7 @@ work context <bead-id>         # what should I know before starting this?
 work status                    # what's active right now
 work history                   # recent runs with outcomes
 work trace <bead-id>           # replay a run's timeline
+work spine-parity              # compare legacy work traces with the Polis spine shadow stream
 work feed --since 24h          # structured JSONL for learning-loop
 work deliberate "should we split the auth module?" --type architecture
 work decide "approve deploy?" --evidence pol-abc1,pol-abc2
@@ -74,6 +75,17 @@ mv work ~/.local/bin/
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--strict` | `true` | Fail on optional integration errors by default (set `--strict=false` or `WORK_STRICT=0` to relax) |
+
+---
+
+### Observability Env
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `WORK_SPINE_DUAL_WRITE` | unset | When `1` or `true`, `work run` shadow-writes spine events alongside the legacy trace JSONL/index |
+| `POLIS_SPINE_DIR` | `~/.polis/spine/events` | Override the spine event directory for dual-write and parity checks |
+
+Legacy `work history` and `work trace` remain the operator-facing views during the D15 parity period. Spine output is additive until parity is proven.
 
 ---
 
@@ -184,6 +196,22 @@ work trace <bead-id> [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--json` | `false` | Output raw JSONL events instead of formatted timeline |
+
+---
+
+### `work spine-parity`
+
+Compare the legacy `~/.work/traces` store against the Polis spine shadow stream. The command exits non-zero if runs are missing or if terminal state, gate verdict, or event ordering drift.
+
+```
+work spine-parity [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--work-dir` | `~/.work` | Work state directory containing legacy traces |
+| `--spine-dir` | `~/.polis/spine/events` | Spine event directory |
+| `--json` | `false` | Output the parity report as JSON |
 
 ---
 

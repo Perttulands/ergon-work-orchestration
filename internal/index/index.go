@@ -81,11 +81,15 @@ func migrate(db *sql.DB) error {
 
 // Record inserts a trace metadata record.
 func (d *DB) Record(meta trace.Metadata) error {
+	traceID := meta.TraceID
+	if traceID == "" {
+		traceID = meta.BeadID
+	}
 	_, err := d.db.Exec(`
 		INSERT OR REPLACE INTO runs (trace_id, agent, task, bead_id, start_time, end_time, outcome, duration_s, trace_path)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		meta.BeadID,
+		traceID,
 		meta.Agent,
 		meta.Task,
 		meta.BeadID,
@@ -143,7 +147,7 @@ func (d *DB) Rebuild(workDir string) (int, error) {
 	var count int
 	err := filepath.Walk(tracesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // skip errors
+			return ignoreTraceRebuildError(path, err)
 		}
 		if info.IsDir() || filepath.Ext(path) != ".jsonl" {
 			return nil
@@ -151,11 +155,11 @@ func (d *DB) Rebuild(workDir string) (int, error) {
 
 		meta, err := metadataFromTrace(path)
 		if err != nil {
-			return nil // skip malformed traces
+			return ignoreTraceRebuildError(path, err)
 		}
 
 		if err := d.Record(meta); err != nil {
-			return nil // skip record errors
+			return ignoreTraceRebuildError(path, err)
 		}
 		count++
 		return nil
@@ -164,6 +168,10 @@ func (d *DB) Rebuild(workDir string) (int, error) {
 		return count, fmt.Errorf("walk traces: %w", err)
 	}
 	return count, nil
+}
+
+func ignoreTraceRebuildError(_ string, _ error) error {
+	return nil
 }
 
 // metadataFromTrace extracts run metadata from a JSONL trace file by reading
@@ -192,10 +200,13 @@ func metadataFromTrace(path string) (trace.Metadata, error) {
 	}
 
 	meta := trace.Metadata{
-		BeadID:   begin.Bead,
-		Agent:    begin.Agent,
-		Task:     begin.Task,
-		FilePath: path,
+		BeadID:    begin.Bead,
+		TraceID:   begin.TraceID,
+		SessionID: begin.SessionID,
+		RunID:     begin.RunID,
+		Agent:     begin.Agent,
+		Task:      begin.Task,
+		FilePath:  path,
 	}
 
 	if t, err := time.Parse(time.RFC3339, begin.Timestamp); err == nil {

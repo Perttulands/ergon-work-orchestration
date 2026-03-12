@@ -73,6 +73,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	if rtErr != nil {
 		return rtErr
 	}
+	model := worker.ModelForRuntime(resolvedRuntime, citizen)
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -140,7 +141,10 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	prompt := assemblePrompt(task, citizen, beadID, repo, ctx)
 
 	// Step 4: Open trace
-	tr, traceErr := trace.Open(workDir, beadID, citizen, task)
+	tr, traceErr := trace.OpenWithOptions(workDir, beadID, citizen, task, trace.OpenOptions{
+		Repo:  repo,
+		Model: model,
+	})
 	if traceErr != nil {
 		if policyErr := applyFailurePolicy(cmd, stepTraceOpen, traceErr); policyErr != nil {
 			return policyErr
@@ -243,6 +247,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		meta := tr.GetMetadata(outcome)
 		durationS = meta.DurationS
 		tr.Close(outcome, spawnErr)
+		if shadowErr := tr.ShadowError(); shadowErr != nil {
+			cmd.Printf("  Warning: spine dual-write failed — legacy trace retained: %v\n", shadowErr)
+		}
 
 		// Index the run for fast queries
 		idx, idxErr := index.Open(workDir)
