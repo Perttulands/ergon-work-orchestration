@@ -243,6 +243,8 @@ Output structured JSONL feed entries for learning-loop consumption.
 work feed [flags]
 ```
 
+Pass each emitted JSON line to `loop ingest -`, then query the same task later with `loop query "<task>" --json`. This is the supported D17 round-trip contract.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--since` | `24h` | Time window filter (`<n>h`, `<n>d`, `<n>m`) |
