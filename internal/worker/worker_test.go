@@ -847,3 +847,48 @@ func TestIsStillWorking(t *testing.T) {
 		})
 	}
 }
+
+func TestSendFollowUpOK(t *testing.T) {
+	fake := useFake(t)
+	fake.sessions["test-session"] = &fakeSession{pane: "❯ "}
+
+	err := SendFollowUp("test-session", "Please add unit tests")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the message was sent to the pane
+	pane, _ := fake.capturePane("test-session")
+	if !strings.Contains(pane, "Please add unit tests") {
+		t.Errorf("pane should contain follow-up message, got: %q", pane)
+	}
+}
+
+func TestSendFollowUpSessionNotFound(t *testing.T) {
+	_ = useFake(t)
+	err := SendFollowUp("nonexistent-session", "hello")
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention not found, got: %v", err)
+	}
+}
+
+func TestWaitForCompletionExported(t *testing.T) {
+	fake := useFake(t)
+	fake.sessions["wfc-session"] = &fakeSession{pane: "working..."}
+
+	// Set pane to idle after a brief moment
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		fake.mu.Lock()
+		fake.sessions["wfc-session"].pane = "done\n❯ "
+		fake.mu.Unlock()
+	}()
+
+	output := WaitForCompletion("wfc-session", 2*time.Second)
+	if !strings.Contains(output, "❯") {
+		t.Errorf("should detect completion, got: %q", output)
+	}
+}

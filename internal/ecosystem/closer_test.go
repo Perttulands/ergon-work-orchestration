@@ -2,6 +2,7 @@ package ecosystem
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,6 +147,77 @@ func TestFormatCloseReasonShortDuration(t *testing.T) {
 
 // TestFormatCloseReasonGateFail verifies the gate:fail formatting path.
 // This is how agents learn that quality checks didn't pass.
+func TestCaptureGitDiffEmpty(t *testing.T) {
+	// Empty repo path returns empty string
+	if got := CaptureGitDiff(""); got != "" {
+		t.Errorf("expected empty string for empty repo, got %q", got)
+	}
+}
+
+func TestCaptureGitDiffCleanRepo(t *testing.T) {
+	dir := t.TempDir()
+	// Init a git repo with a commit so HEAD exists
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "test"},
+		{"commit", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s: %v", args, out, err)
+		}
+	}
+
+	got := CaptureGitDiff(dir)
+	if got != "" {
+		t.Errorf("clean repo should have empty diff, got %q", got)
+	}
+}
+
+func TestCaptureGitDiffDirtyRepo(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "test"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s: %v", args, out, err)
+		}
+	}
+	// Create and commit a file, then modify it
+	os.WriteFile(dir+"/hello.txt", []byte("hello\n"), 0o644)
+	for _, args := range [][]string{
+		{"add", "."},
+		{"commit", "-m", "add hello"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s: %v", args, out, err)
+		}
+	}
+	os.WriteFile(dir+"/hello.txt", []byte("hello world\n"), 0o644)
+
+	got := CaptureGitDiff(dir)
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("diff should contain the change, got %q", got)
+	}
+}
+
+func TestCaptureGitDiffNoGit(t *testing.T) {
+	// A directory that is not a git repo
+	dir := t.TempDir()
+	got := CaptureGitDiff(dir)
+	if got != "" {
+		t.Errorf("non-git dir should return empty, got %q", got)
+	}
+}
+
 func TestFormatCloseReasonGateFail(t *testing.T) {
 	pass := false
 	score := 0.30

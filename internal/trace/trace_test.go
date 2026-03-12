@@ -381,6 +381,52 @@ func TestGetMetadata(t *testing.T) {
 	}
 }
 
+// TestSquireVerdictEventCompatibility verifies that squire_verdict events
+// are handled correctly by ReadTrace — unknown event types must not break parsing.
+func TestSquireVerdictEventCompatibility(t *testing.T) {
+	workDir := t.TempDir()
+	tr, err := Open(workDir, "squire-compat", "zeus", "implement feature")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	pass := true
+	tr.Emit(Event{
+		EventType: "squire_verdict",
+		Output:    "All changes look complete",
+		Pass:      &pass,
+	})
+	tr.Emit(Event{
+		EventType: "gate_result",
+		Pass:      &pass,
+		Score:     func() *float64 { s := 0.95; return &s }(),
+	})
+	tr.Close("success", nil)
+
+	events, err := ReadTrace(tr.FilePath())
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+
+	// begin + squire_verdict + gate_result + end = 4
+	if len(events) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(events))
+	}
+	if events[1].EventType != "squire_verdict" {
+		t.Errorf("event 1 type = %s, want squire_verdict", events[1].EventType)
+	}
+	if events[1].Pass == nil || !*events[1].Pass {
+		t.Error("squire_verdict pass should be true")
+	}
+	if events[1].Output != "All changes look complete" {
+		t.Errorf("squire_verdict output = %q", events[1].Output)
+	}
+	// gate_result still parses correctly after squire_verdict
+	if events[2].EventType != "gate_result" {
+		t.Errorf("event 2 type = %s, want gate_result", events[2].EventType)
+	}
+}
+
 func TestBeadID(t *testing.T) {
 	workDir := t.TempDir()
 	tr, err := Open(workDir, "bead-id-test", "zeus", "task")

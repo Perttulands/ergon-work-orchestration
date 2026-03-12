@@ -11,6 +11,7 @@ import (
 	workctx "polis/work/internal/context"
 	"polis/work/internal/ecosystem"
 	"polis/work/internal/index"
+	"polis/work/internal/squire"
 	"polis/work/internal/trace"
 	"polis/work/internal/worker"
 
@@ -170,6 +171,35 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		cmd.Printf("  Worker timed out after %s\n", deadline)
 	} else {
 		cmd.Printf("  Worker finished in %s\n", result.Finished.Sub(result.Started).Round(time.Second))
+	}
+
+	// Step 5b: Squire completion check
+	if spawnErr == nil && !result.TimedOut && squireEnabled() {
+		diff := ecosystem.CaptureGitDiff(repo)
+		verdict, sqErr := squire.Check(task, diff, result.Output)
+		if sqErr != nil {
+			cmd.Printf("  Squire: error (proceeding): %v\n", sqErr)
+		} else if verdict != nil {
+			if tr != nil {
+				tr.Emit(trace.Event{
+					EventType: "squire_verdict",
+					Output:    verdict.Reasoning,
+					Pass:      &verdict.Complete,
+				})
+			}
+			if !verdict.Complete && verdict.FollowUp != "" {
+				cmd.Printf("  Squire: INCOMPLETE — %s\n", verdict.Reasoning)
+				cmd.Printf("  Squire: Re-engaging agent...\n")
+				if sendErr := worker.SendFollowUp(sessionName, verdict.FollowUp); sendErr != nil {
+					cmd.Printf("  Squire: follow-up failed: %v\n", sendErr)
+				} else {
+					retryOutput := worker.WaitForCompletion(sessionName, 5*time.Minute)
+					result.Output = retryOutput
+				}
+			} else {
+				cmd.Printf("  Squire: COMPLETE — %s\n", verdict.Reasoning)
+			}
+		}
 	}
 
 	// Step 6: Gate check
@@ -341,6 +371,10 @@ CONSTRAINTS:
 
 	prompt += "\nDONE WHEN: The task is complete, tests pass, and code is clean."
 	return prompt
+}
+
+func squireEnabled() bool {
+	return os.Getenv("WORK_SQUIRE") == "1"
 }
 
 func randomID() string {

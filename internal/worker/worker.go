@@ -460,3 +460,26 @@ func isStillWorking(output string) bool {
 func isPromptLine(line string) bool {
 	return strings.HasPrefix(line, "❯") || strings.HasPrefix(line, "›")
 }
+
+// SendFollowUp sends a follow-up message to an existing tmux session.
+// Uses tmux send-keys -l (literal mode) to handle special characters.
+func SendFollowUp(session, message string) error {
+	if !backend.sessionExists(session) {
+		return fmt.Errorf("session %s not found", session)
+	}
+	// Use send-keys -l for literal text (no special character interpretation),
+	// then send Enter to submit.
+	if err := backend.sendKeysRaw(session, "-l", message); err != nil {
+		return fmt.Errorf("send follow-up text: %w", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := backend.sendKeysRaw(session, "Enter"); err != nil {
+		return fmt.Errorf("send follow-up enter: %w", err)
+	}
+	return nil
+}
+
+// WaitForCompletion re-exports waitForCompletion for use by the Squire retry path.
+func WaitForCompletion(session string, maxWait time.Duration) string {
+	return waitForCompletion(session, maxWait)
+}
