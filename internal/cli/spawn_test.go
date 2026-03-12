@@ -78,6 +78,7 @@ esac
 		"tmux":  tmuxScript,
 		"relay": `exit 1`,
 	})
+	t.Setenv("WORK_STRICT", "0")
 	t.Setenv("HOME", t.TempDir())
 
 	root := NewRoot("test")
