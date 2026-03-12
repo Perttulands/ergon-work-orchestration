@@ -12,6 +12,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	beadsadapter "polis/work/internal/adapters/beads"
+	gateadapter "polis/work/internal/adapters/gate"
+	relayadapter "polis/work/internal/adapters/relay"
 )
 
 // BvSearchResult is one hit from bv --robot-search.
@@ -167,52 +171,37 @@ func Available(tool string) bool {
 // BrCreate creates a new bead and returns its ID.
 // Returns empty result with no error if br is not available.
 func BrCreate(title, repo string) (*BeadCreateResult, error) {
-	if !Available("br") {
+	if !beadsadapter.Available() {
 		return nil, nil
 	}
-
-	args := []string{"create", title, "--silent"}
-	cmd := exec.Command("br", args...)
-	cmd.Dir = repo
-	// Use Output() to avoid stderr contamination from br's INFO logs.
-	out, err := cmd.Output()
+	id, err := beadsadapter.Create(title, repo)
 	if err != nil {
-		return nil, fmt.Errorf("br create: %s: %w", strings.TrimSpace(string(out)), err)
+		return nil, err
 	}
-
-	id := strings.TrimSpace(string(out))
 	return &BeadCreateResult{ID: id}, nil
 }
 
 // BrClose closes a bead with a reason.
 func BrClose(id, reason, repo string) error {
-	if !Available("br") {
+	if !beadsadapter.Available() {
 		return nil
 	}
-
-	args := []string{"close", id, "--reason", reason}
-	cmd := exec.Command("br", args...)
-	cmd.Dir = repo
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("br close %s: %s: %w", id, strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return beadsadapter.Close(id, reason, repo)
 }
 
 // BrShow fetches a bead by ID and returns its metadata.
 // Returns nil with no error if br is not available.
 func BrShow(id string) (*BrShowResult, error) {
-	if !Available("br") {
+	if !beadsadapter.Available() {
 		return nil, nil
 	}
 	if strings.TrimSpace(id) == "" {
 		return nil, nil
 	}
 
-	cmd := exec.Command("br", "show", id, "--json")
-	out, err := cmd.Output()
+	out, err := beadsadapter.ShowJSON(id, "")
 	if err != nil {
-		return nil, fmt.Errorf("br show %s: %w", id, err)
+		return nil, err
 	}
 
 	// br show --json returns an array with one element
@@ -248,85 +237,30 @@ func BrAgentState(agent, state string) error {
 // RelayHeartbeat updates the heartbeat for an agent.
 // Returns nil if relay is not available.
 func RelayHeartbeat(agent string) error {
-	if !Available("relay") {
-		return nil
-	}
-	cmd := exec.Command("relay", "heartbeat", "--agent", agent)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("relay heartbeat %s: %s: %w", agent, strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return relayadapter.Heartbeat(agent)
 }
 
 // RelayRegister registers an agent identity on the relay bus.
 // Returns nil if relay is not available.
 func RelayRegister(agent string) error {
-	if !Available("relay") {
-		return nil
-	}
-	if strings.TrimSpace(agent) == "" {
-		return nil
-	}
-	cmd := exec.Command("relay", "register", agent)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("relay register %s: %s: %w", agent, strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return relayadapter.Register(agent)
 }
 
 // RelaySend sends a message from one agent to another, optionally threaded.
 // msgType and payload are optional — pass empty strings to omit.
 // Returns nil if relay is not available.
 func RelaySend(from, to, message, thread, msgType, payload string) error {
-	if !Available("relay") {
-		return nil
-	}
-	args := []string{"send", to, message, "--agent", from}
-	if thread != "" {
-		args = append(args, "--thread", thread)
-	}
-	if msgType != "" {
-		args = append(args, "--type", msgType)
-	}
-	if payload != "" {
-		args = append(args, "--payload", payload)
-	}
-	cmd := exec.Command("relay", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("relay send %s->%s: %s: %w", from, to, strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return relayadapter.Send(from, to, message, thread, msgType, payload)
 }
 
 // GateCheck runs gate check and returns the verdict.
 // Returns nil with no error if gate is not available.
 func GateCheck(repo, citizen string) (*GateResult, error) {
-	if !Available("gate") {
-		return nil, nil
+	result, err := gateadapter.Check(repo, citizen)
+	if result == nil || err != nil {
+		return nil, err
 	}
-
-	args := []string{"check", ".", "--json"}
-	if citizen != "" {
-		args = append(args, "--citizen", citizen)
-	}
-	cmd := exec.Command("gate", args...)
-	cmd.Dir = repo
-	// Use Output() not CombinedOutput() — gate writes JSON to stdout only.
-	// CombinedOutput() captures stderr too, where br's INFO logs leak through
-	// gate's bead.Record calls, contaminating the JSON and breaking parsing.
-	out, err := cmd.Output()
-	raw := strings.TrimSpace(string(out))
-
-	// gate may return non-zero for failures but still produce valid JSON
-	var result GateResult
-	if jsonErr := json.Unmarshal(out, &result); jsonErr != nil {
-		// If JSON parse fails, create result from exit code
-		result.Pass = err == nil
-		result.Raw = raw
-		return &result, nil
-	}
-	result.Raw = raw
-	return &result, nil
+	return &GateResult{Pass: result.Pass, Score: result.Score, Raw: result.Raw}, nil
 }
 
 // --- Learning-loop integration ---
