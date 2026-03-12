@@ -18,7 +18,8 @@ The forge doesn't care about your intentions. It cares about what comes out the 
 work run "add JWT authentication" --repo myproject
 work spawn hugo --repo myproject     # spawn a ready worker session
 work send agent-hugo "now fix the tests"  # inject a prompt into a running session
-work --strict run "fix flaky auth test" --repo myproject  # fail on optional integration errors
+work run "fix flaky auth test" --repo myproject  # strict mode is on by default
+work --strict=false run "fix flaky auth test" --repo myproject  # explicitly relax optional integrations
 work context <bead-id>         # what should I know before starting this?
 work status                    # what's active right now
 work history                   # recent runs with outcomes
@@ -72,7 +73,7 @@ mv work ~/.local/bin/
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--strict` | `false` | Fail on optional integration errors (also set via `WORK_STRICT=1`) |
+| `--strict` | `true` | Fail on optional integration errors by default (set `--strict=false` or `WORK_STRICT=0` to relax) |
 
 ---
 
@@ -298,14 +299,14 @@ Both `work run` and `work spawn` resolve runtime from this profile chain. `--run
 
 | Variable | Description |
 |----------|-------------|
-| `WORK_STRICT` | Enable strict failure mode when set to `1`, `true`, `yes`, or `on` |
+| `WORK_STRICT` | Override strict mode: `1`/`true`/`yes`/`on` enables, `0`/`false`/`no`/`off` relaxes |
 | `WORK_RUNTIME_CONFIG` | Path to runtime profile JSON file (highest priority) |
 | `LEARNING_LOOP_DIR` | Base directory for learning-loop scripts; falls back to `~/tools/learning-loop` |
 | `HOME` | Used for all `~/.work` paths and fallback runtime config location |
 
 ### Failure Policy
 
-Default mode: optional integrations degrade gracefully with warnings. Strict mode (`--strict` or `WORK_STRICT=1`): optional integration errors become hard failures.
+Default mode is strict: optional integration errors become hard failures. Relaxed mode requires `--strict=false` or `WORK_STRICT=0`.
 
 ### Filesystem Layout
 
@@ -358,7 +359,7 @@ Default mode: optional integrations degrade gracefully with warnings. Strict mod
 ✅ Shell completions (bash, zsh, fish, powershell)
 
 ⚠️ `BrAgentState` calls (set agent working/idle state) are no-ops by design
-⚠️ The `deep` gate level includes a `risk` gate that always passes — risk scoring not yet implemented
+⚠️ `deep` currently adds full `truthsayer` and `ubs` scans only. There is no separate risk gate until that check is real.
 ⚠️ Learning-loop template selection relies on an external `select-template.sh` script; skipped if absent
 ⚠️ SQLite index rebuild skips individually corrupted trace lines
 

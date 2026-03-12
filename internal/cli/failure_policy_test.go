@@ -13,6 +13,20 @@ func TestStrictModeFromEnv(t *testing.T) {
 	}
 }
 
+func TestStrictModeDefaultsTrue(t *testing.T) {
+	t.Setenv("WORK_STRICT", "")
+	if !strictMode(nil) {
+		t.Fatal("strictMode should default to true when unset")
+	}
+}
+
+func TestStrictModeCanBeDisabledFromEnv(t *testing.T) {
+	t.Setenv("WORK_STRICT", "0")
+	if strictMode(nil) {
+		t.Fatal("strictMode should be false when WORK_STRICT=0")
+	}
+}
+
 func TestStrictModeFromFlag(t *testing.T) {
 	t.Setenv("WORK_STRICT", "0")
 	cmd := &cobra.Command{Use: "test"}

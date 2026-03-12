@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// SenateCase is the case file format senate deliberate --case expects.
+// SenateCase is the local record format work writes before calling senate ask.
 type SenateCase struct {
 	ID                string   `json:"id"`
 	Type              string   `json:"type"`
@@ -26,7 +26,7 @@ type SenateCase struct {
 	FiledBy           string   `json:"filed_by,omitempty"`
 }
 
-// SenateVerdict is the verdict returned by senate deliberate.
+// SenateVerdict is the verdict returned by senate ask.
 type SenateVerdict struct {
 	CaseID         string `json:"case_id"`
 	Verdict        string `json:"verdict"`
@@ -49,10 +49,10 @@ func newDeliberateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deliberate <question>",
 		Short: "Structured deliberation via Senate with bead tracking",
-		Long: `Wraps senate deliberate with molecule bead lifecycle:
+		Long: `Wraps senate ask with molecule bead lifecycle:
 1. Creates a molecule bead for the deliberation
-2. Writes a case file from the question
-3. Calls senate deliberate --case <file>
+2. Writes a local case record from the question
+3. Calls senate ask
 4. Captures the verdict
 5. Closes the molecule bead with verdict text
 6. If approved, senate handoff creates implementation beads`,
@@ -136,21 +136,33 @@ func runDeliberate(cmd *cobra.Command, question, caseType string, participants i
 	}
 	cmd.Printf("  Case: %s\n", casePath)
 
-	// Step 3: Call senate deliberate
-	args := []string{"deliberate", "--case", casePath, "--json",
-		"--agents", fmt.Sprintf("%d", participants)}
+	// Step 3: Call senate ask
+	args := []string{
+		"ask",
+		question,
+		"--json",
+		"--agents", fmt.Sprintf("%d", participants),
+		"--type", caseType,
+		"--filed-by", filedBy,
+	}
 	if stateDir != "" {
 		args = append(args, "--state-dir", stateDir)
 	}
-	if noHandoff {
-		args = append(args, "--no-handoff")
-	}
 
-	cmd.Printf("  Running senate deliberate (this may take several minutes)...\n")
+	cmd.Printf("  Running senate ask (this may take several minutes)...\n")
 	senateCmd := exec.Command("senate", args...)
 	senateCmd.Dir = repo
-	out, senateErr := senateCmd.CombinedOutput()
+	out, senateErr := senateCmd.Output()
 	raw := strings.TrimSpace(string(out))
+	stderrText := ""
+	if senateErr != nil {
+		if exitErr, ok := senateErr.(*exec.ExitError); ok {
+			stderrText = strings.TrimSpace(string(exitErr.Stderr))
+			if raw == "" {
+				raw = stderrText
+			}
+		}
+	}
 
 	// Step 4: Parse verdict
 	var verdict SenateVerdict
@@ -177,6 +189,9 @@ func runDeliberate(cmd *cobra.Command, question, caseType string, participants i
 	} else {
 		if senateErr != nil {
 			cmd.Printf("  Senate error: %v\n", senateErr)
+			if stderrText != "" {
+				cmd.Printf("  Senate stderr: %s\n", truncate(stderrText, 500))
+			}
 		}
 		if raw != "" {
 			cmd.Printf("  Senate output: %s\n", truncate(raw, 500))
@@ -200,7 +215,11 @@ func runDeliberate(cmd *cobra.Command, question, caseType string, participants i
 	// Step 6: Handoff if approved and not skipped
 	if verdictParsed && verdict.Verdict == "approved" && !noHandoff {
 		cmd.Printf("  Verdict approved — running senate handoff...\n")
-		handoffArgs := []string{"handoff", "--case-id", caseID, "--json"}
+		handoffCaseID := verdict.CaseID
+		if handoffCaseID == "" {
+			handoffCaseID = caseID
+		}
+		handoffArgs := []string{"handoff", "--case-id", handoffCaseID, "--json"}
 		if stateDir != "" {
 			handoffArgs = append(handoffArgs, "--state-dir", stateDir)
 		}
@@ -222,7 +241,7 @@ func runDeliberate(cmd *cobra.Command, question, caseType string, participants i
 	}())
 
 	if senateErr != nil {
-		return fmt.Errorf("senate deliberate failed: %w", senateErr)
+		return fmt.Errorf("senate ask failed: %w", senateErr)
 	}
 	return nil
 }

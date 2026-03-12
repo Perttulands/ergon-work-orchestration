@@ -350,7 +350,7 @@ func randomID() string {
 }
 
 // lintBeforeDispatch validates the task (or bead) quality before starting work.
-// If task looks like a bead ID (pol-xxx), fetches the bead and lints it.
+// If task looks like a bead ID (prefix-suffix), fetches the bead and lints it.
 // Otherwise lints the task title for minimum quality.
 func lintBeforeDispatch(cmd *cobra.Command, task string) error {
 	if beadlint.IsBeadID(task) {

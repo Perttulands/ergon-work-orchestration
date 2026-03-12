@@ -1,13 +1,35 @@
 package ecosystem
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"polis/work/internal/testutil"
 )
+
+func readLoggedArgs(t *testing.T, path string) []string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read logged args %s: %v", path, err)
+	}
+
+	raw := bytes.Split(data, []byte{0})
+	if len(raw) > 0 && len(raw[len(raw)-1]) == 0 {
+		raw = raw[:len(raw)-1]
+	}
+
+	args := make([]string, 0, len(raw))
+	for _, item := range raw {
+		args = append(args, string(item))
+	}
+	return args
+}
 
 func TestAvailable(t *testing.T) {
 	if !Available("sh") {
@@ -535,6 +557,41 @@ func TestGateCheckStderrDoesNotContaminateJSON(t *testing.T) {
 	}
 }
 
+func TestGateCheckCommandContract(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "gate.args")
+	pwdPath := filepath.Join(tmp, "gate.pwd")
+
+	testutil.SandboxPATH(t, map[string]string{
+		"gate": `pwd > ` + pwdPath + `
+printf '%s\0' "$@" > ` + argsPath + `
+printf '{"pass":true,"score":0.95}'`,
+	})
+
+	repo := t.TempDir()
+	result, err := GateCheck(repo, "zeus")
+	if err != nil {
+		t.Fatalf("GateCheck should not error: %v", err)
+	}
+	if result == nil || !result.Pass || result.Score != 0.95 {
+		t.Fatalf("unexpected gate result: %#v", result)
+	}
+
+	args := readLoggedArgs(t, argsPath)
+	want := []string{"check", ".", "--json", "--citizen", "zeus"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("gate args = %#v, want %#v", args, want)
+	}
+
+	pwd, err := os.ReadFile(pwdPath)
+	if err != nil {
+		t.Fatalf("read gate pwd: %v", err)
+	}
+	if got := string(bytes.TrimSpace(pwd)); got != repo {
+		t.Fatalf("gate cwd = %q, want %q", got, repo)
+	}
+}
+
 func TestIngestRunWithMock(t *testing.T) {
 	testutil.SandboxPATH(t, map[string]string{
 		"loop": `cat >/dev/null`, // consume stdin
@@ -565,6 +622,65 @@ func TestIngestRunError(t *testing.T) {
 	err := IngestRun("bead-3", "fix bug", "success", "zeus", 120, true, true, nil, "")
 	if err == nil {
 		t.Error("IngestRun should return error when loop fails")
+	}
+}
+
+func TestIngestRunCommandContract(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "loop.args")
+	stdinPath := filepath.Join(tmp, "loop.stdin.json")
+
+	testutil.SandboxPATH(t, map[string]string{
+		"loop": `printf '%s\0' "$@" > ` + argsPath + `
+cat > ` + stdinPath,
+	})
+
+	err := IngestRun("bead-42", "fix flaky gate contract test", "gate_fail", "zeus", 91, false, false, []string{"internal/cli/run.go"}, "gate failed")
+	if err != nil {
+		t.Fatalf("IngestRun should not error: %v", err)
+	}
+
+	args := readLoggedArgs(t, argsPath)
+	wantArgs := []string{"ingest", "-"}
+	if !reflect.DeepEqual(args, wantArgs) {
+		t.Fatalf("loop args = %#v, want %#v", args, wantArgs)
+	}
+
+	data, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatalf("read loop stdin: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal loop payload: %v", err)
+	}
+
+	if payload["id"] != "bead-42" {
+		t.Fatalf("payload id = %v, want bead-42", payload["id"])
+	}
+	if payload["task"] != "fix flaky gate contract test" {
+		t.Fatalf("payload task = %v", payload["task"])
+	}
+	if payload["outcome"] != "gate_fail" {
+		t.Fatalf("payload outcome = %v, want gate_fail", payload["outcome"])
+	}
+	if payload["agent"] != "zeus" {
+		t.Fatalf("payload agent = %v, want zeus", payload["agent"])
+	}
+	if payload["duration_seconds"] != float64(91) {
+		t.Fatalf("payload duration_seconds = %v, want 91", payload["duration_seconds"])
+	}
+	if payload["tests_passed"] != false || payload["lint_passed"] != false {
+		t.Fatalf("payload verification flags = tests:%v lint:%v, want false/false", payload["tests_passed"], payload["lint_passed"])
+	}
+	if payload["error_message"] != "gate failed" {
+		t.Fatalf("payload error_message = %v, want gate failed", payload["error_message"])
+	}
+
+	files, ok := payload["files_touched"].([]interface{})
+	if !ok || len(files) != 1 || files[0] != "internal/cli/run.go" {
+		t.Fatalf("payload files_touched = %#v, want [internal/cli/run.go]", payload["files_touched"])
 	}
 }
 

@@ -11,7 +11,7 @@ func NewRoot(version string) *cobra.Command {
 		Short: "Working memory for Polis — orchestrate agent work",
 		Long:  "work is how Polis orchestrates. It holds what's happening now, what happened before, and what any citizen should know before starting a task.",
 	}
-	root.PersistentFlags().Bool("strict", false, "fail on optional integration errors (or set WORK_STRICT=1)")
+	root.PersistentFlags().Bool("strict", true, "fail on optional integration errors by default (set --strict=false or WORK_STRICT=0 to relax)")
 
 	root.AddCommand(newVersionCmd(version))
 	root.AddCommand(newContextCmd())
