@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 var ErrUnavailable = errors.New("br binary not found on PATH")
@@ -48,7 +50,7 @@ func (c *Client) Run(ctx context.Context, inv Invocation) (Result, error) {
 		return Result{}, fmt.Errorf("br invocation requires args")
 	}
 
-	path, err := exec.LookPath(c.binary())
+	path, err := resolveBinary(c.binary(), inv.Env)
 	if err != nil {
 		return Result{}, ErrUnavailable
 	}
@@ -81,6 +83,50 @@ func (c *Client) Run(ctx context.Context, inv Invocation) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+func resolveBinary(bin string, env []string) (string, error) {
+	if path, ok := envValue("PATH", env); ok {
+		return lookPathWithPATH(bin, path)
+	}
+	return exec.LookPath(bin)
+}
+
+func envValue(key string, env []string) (string, bool) {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix), true
+		}
+	}
+	return "", false
+}
+
+func lookPathWithPATH(bin, pathValue string) (string, error) {
+	if strings.ContainsRune(bin, filepath.Separator) {
+		if isExecutable(bin) {
+			return bin, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	for _, dir := range filepath.SplitList(pathValue) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, bin)
+		if isExecutable(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode()&0o111 != 0
 }
 
 func (c *Client) binary() string {

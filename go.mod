@@ -3,7 +3,7 @@ module polis/work
 go 1.25.0
 
 require (
-	github.com/Perttulands/polis-utils v0.0.0-20260312221136-23172fc2ffe4
+	github.com/Perttulands/polis-utils v0.0.0-20260313002710-ee11f641d073
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.46.1
 )

@@ -1,4 +1,4 @@
-# github.com/Perttulands/polis-utils v0.0.0-20260312221136-23172fc2ffe4
+# github.com/Perttulands/polis-utils v0.0.0-20260313002710-ee11f641d073
 ## explicit; go 1.25.0
 github.com/Perttulands/polis-utils/brclient
 # github.com/dustin/go-humanize v1.0.1
