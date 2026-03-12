@@ -246,12 +246,16 @@ func TestIsBeadID(t *testing.T) {
 		{"pol-x4r5", true},
 		{"pol-abc", true},
 		{"pol-abcdef", true},
+		{"relay-abc", true},
+		{"projects-i01", true},
+		{"pol-10j3.6", true},
 		{"pol-a", false},       // too short
-		{"pol-abcdefg", false}, // too long
-		{"work-abc", false},    // wrong prefix
+		{"pol-abcdefghi", false}, // too long single segment
+		{"relay-", false},
 		{"fix the bug", false},
 		{"", false},
 		{"pol-ABC", false}, // uppercase
+		{"Pol-abc", false}, // uppercase prefix
 	}
 	for _, tt := range tests {
 		got := IsBeadID(tt.input)
