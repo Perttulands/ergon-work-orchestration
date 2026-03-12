@@ -26,6 +26,7 @@ const (
 	stepRelayRegister     = "relay_register"
 	stepRelayHeartbeat    = "relay_heartbeat"
 	stepContextGather     = "context_gather"
+	stepRunState          = "run_state"
 	stepTraceOpen         = "trace_open"
 	stepGateCheck         = "gate_check"
 	stepIndexOpen         = "index_open"
@@ -46,6 +47,7 @@ var policies = map[string]failurePolicy{
 	stepRelayRegister:     {name: "relay register", mode: failOpen},
 	stepRelayHeartbeat:    {name: "relay heartbeat", mode: failOpen},
 	stepContextGather:     {name: "context gather", mode: failOpen},
+	stepRunState:          {name: "run state", mode: failOpen},
 	stepTraceOpen:         {name: "trace open", mode: failOpen},
 	stepGateCheck:         {name: "gate check", mode: failOpen},
 	stepIndexOpen:         {name: "index open", mode: failOpen},

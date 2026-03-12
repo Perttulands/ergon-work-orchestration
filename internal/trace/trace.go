@@ -86,6 +86,9 @@ type Metadata struct {
 type OpenOptions struct {
 	Repo        string
 	Model       string
+	TraceID     string
+	SessionID   string
+	RunID       string
 	EnableSpine bool
 	SpineDir    string
 }
@@ -117,11 +120,20 @@ func OpenWithOptions(workDir, beadID, agent, task string, opts OpenOptions) (*Tr
 		agent:     agent,
 		task:      task,
 		repo:      opts.Repo,
-		traceID:   spine.MintULID(),
-		sessionID: spine.MintSessionID(),
-		runID:     spine.MintRunID(),
+		traceID:   opts.TraceID,
+		sessionID: opts.SessionID,
+		runID:     opts.RunID,
 		model:     opts.Model,
 		started:   now,
+	}
+	if t.traceID == "" {
+		t.traceID = spine.MintULID()
+	}
+	if t.sessionID == "" {
+		t.sessionID = spine.MintSessionID()
+	}
+	if t.runID == "" {
+		t.runID = spine.MintRunID()
 	}
 	if opts.EnableSpine || spine.Enabled() {
 		t.spine = spine.NewWriter(opts.SpineDir)
