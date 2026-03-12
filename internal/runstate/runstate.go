@@ -42,6 +42,7 @@ type Config struct {
 	TraceID         string
 	SessionID       string
 	BeadID          string
+	BeadManaged     bool
 	Task            string
 	Citizen         string
 	Repo            string
@@ -69,6 +70,7 @@ type State struct {
 	TraceID          string                `json:"trace_id"`
 	SessionID        string                `json:"session_id"`
 	BeadID           string                `json:"bead_id"`
+	BeadManaged      bool                  `json:"bead_managed,omitempty"`
 	Task             string                `json:"task"`
 	Citizen          string                `json:"citizen"`
 	Repo             string                `json:"repo"`
@@ -144,6 +146,7 @@ func Create(workDir string, cfg Config) (*Store, error) {
 		TraceID:          cfg.TraceID,
 		SessionID:        cfg.SessionID,
 		BeadID:           cfg.BeadID,
+		BeadManaged:      cfg.BeadManaged,
 		Task:             cfg.Task,
 		Citizen:          cfg.Citizen,
 		Repo:             cfg.Repo,
@@ -272,10 +275,12 @@ func (s *Store) ReadPrompt() (string, error) {
 
 func (s *Store) Checkpoint(step, phase, idempotencyKey, note string) error {
 	now := nowRFC3339()
+	var attempt int
 	if err := s.Update(func(state *State) error {
 		if state.CompletedSteps == nil {
 			state.CompletedSteps = map[string]Checkpoint{}
 		}
+		attempt = state.Attempt
 		state.Phase = phase
 		state.CompletedSteps[step] = Checkpoint{
 			At:             now,
@@ -291,7 +296,7 @@ func (s *Store) Checkpoint(step, phase, idempotencyKey, note string) error {
 		Kind:    "checkpoint",
 		Step:    step,
 		Phase:   phase,
-		Attempt: 1,
+		Attempt: attempt,
 		Note:    note,
 	})
 }
@@ -382,15 +387,21 @@ func (s *Store) Complete(outcome string) error {
 }
 
 func (s *Store) AcquireLease(holder string, ttl time.Duration) error {
-	lease, err := s.readLease()
-	if err == nil {
+	lease, hasLease, err := s.readLeaseIfPresent()
+	if err != nil {
+		return fmt.Errorf("read current lease: %w", err)
+	}
+	if hasLease {
 		expiry, parseErr := time.Parse(time.RFC3339, lease.ExpiresAt)
 		if parseErr == nil && time.Now().Before(expiry) {
 			return ErrFreshLease
 		}
 	}
 
-	hostname, _ := os.Hostname()
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("resolve hostname: %w", err)
+	}
 	now := time.Now().UTC()
 	lease = Lease{
 		Holder:     holder,
@@ -409,6 +420,37 @@ func (s *Store) AcquireLease(holder string, ttl time.Duration) error {
 	})
 }
 
+func (s *Store) StealLease(holder string, ttl time.Duration) error {
+	prior, hasPrior, err := s.readLeaseIfPresent()
+	if err != nil {
+		return fmt.Errorf("read current lease: %w", err)
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("resolve hostname: %w", err)
+	}
+	now := time.Now().UTC()
+	lease := Lease{
+		Holder:     holder,
+		Hostname:   hostname,
+		PID:        os.Getpid(),
+		AcquiredAt: now.Format(time.RFC3339),
+		ExpiresAt:  now.Add(ttl).Format(time.RFC3339),
+	}
+	if err := atomicWriteJSON(s.leasePath(), lease); err != nil {
+		return err
+	}
+	note := holder
+	if hasPrior && prior.Holder != "" {
+		note = fmt.Sprintf("%s (stole from %s pid=%d host=%s)", holder, prior.Holder, prior.PID, prior.Hostname)
+	}
+	return s.appendJournal(JournalEntry{
+		TS:   now.Format(time.RFC3339),
+		Kind: "lease_stolen",
+		Note: note,
+	})
+}
+
 func (s *Store) ReleaseLease() error {
 	if err := os.Remove(s.leasePath()); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("release lease: %w", err)
@@ -417,6 +459,30 @@ func (s *Store) ReleaseLease() error {
 		TS:   nowRFC3339(),
 		Kind: "lease_released",
 	})
+}
+
+func (s *Store) BeginResume(note string) (State, error) {
+	var updated State
+	now := nowRFC3339()
+	if err := s.Update(func(state *State) error {
+		state.Attempt++
+		state.UpdatedAt = now
+		state.LastError = nil
+		updated = *state
+		return nil
+	}); err != nil {
+		return State{}, err
+	}
+	if err := s.appendJournal(JournalEntry{
+		TS:      now,
+		Kind:    "resume_started",
+		Phase:   updated.Phase,
+		Attempt: updated.Attempt,
+		Note:    note,
+	}); err != nil {
+		return State{}, err
+	}
+	return updated, nil
 }
 
 func (s *Store) ReadJournal() ([]JournalEntry, error) {
@@ -468,6 +534,17 @@ func (s *Store) readLease() (Lease, error) {
 		return lease, fmt.Errorf("parse lease: %w", err)
 	}
 	return lease, nil
+}
+
+func (s *Store) readLeaseIfPresent() (Lease, bool, error) {
+	lease, err := s.readLease()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Lease{}, false, nil
+		}
+		return Lease{}, false, err
+	}
+	return lease, true, nil
 }
 
 func (s *Store) statePath() string {

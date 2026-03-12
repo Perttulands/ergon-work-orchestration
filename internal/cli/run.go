@@ -116,6 +116,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	var stateStore *runstate.Store
 	if store, stateErr := runstate.Create(workDir, runstate.Config{
 		BeadID:          beadID,
+		BeadManaged:     bead != nil,
 		Task:            task,
 		Citizen:         citizen,
 		Repo:            repo,
@@ -141,7 +142,13 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 			}
 		}
 		defer stateStore.ReleaseLease()
-		if cpErr := stateStore.MarkEffect("br_create", checkpointKey(beadID, "br_create", 1), "bead allocated for run"); cpErr != nil {
+		if bead != nil {
+			if cpErr := stateStore.MarkEffect("br_create", checkpointKey(beadID, "br_create", 1), "bead created via br"); cpErr != nil {
+				if policyErr := applyFailurePolicy(cmd, stepRunState, cpErr); policyErr != nil {
+					return policyErr
+				}
+			}
+		} else if cpErr := stateStore.MarkEffect("local_bead_alloc", checkpointKey(beadID, "local_bead_alloc", 1), "synthetic bead id allocated locally"); cpErr != nil {
 			if policyErr := applyFailurePolicy(cmd, stepRunState, cpErr); policyErr != nil {
 				return policyErr
 			}
@@ -366,6 +373,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 			return policyErr
 		}
 	} else {
+		recordStateEffect(cmd, stateStore, beadID, "feedback_collect", "feedback collected")
 		recordStateCheckpoint(cmd, stateStore, beadID, "feedback_collect", runstate.PhaseFeedbackDone, "feedback collected")
 	}
 
@@ -382,6 +390,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 				return policyErr
 			}
 		} else {
+			recordStateEffect(cmd, stateStore, beadID, "loop_ingest", outcome)
 			recordStateCheckpoint(cmd, stateStore, beadID, "loop_ingest", runstate.PhaseLoopIngested, outcome)
 		}
 	}
@@ -392,6 +401,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 			return policyErr
 		}
 	} else {
+		recordStateEffect(cmd, stateStore, beadID, "experience_append", outcome)
 		recordStateCheckpoint(cmd, stateStore, beadID, "experience_append", runstate.PhaseExperienceDone, outcome)
 	}
 
@@ -531,7 +541,8 @@ func recordStateCheckpoint(cmd *cobra.Command, store *runstate.Store, beadID, st
 	if store == nil {
 		return
 	}
-	if err := store.Checkpoint(step, phase, checkpointKey(beadID, step, 1), note); err != nil {
+	attempt := stateAttempt(store)
+	if err := store.Checkpoint(step, phase, checkpointKey(beadID, step, attempt), note); err != nil {
 		_ = applyFailurePolicy(cmd, stepRunState, err)
 	}
 }
@@ -540,9 +551,21 @@ func recordStateEffect(cmd *cobra.Command, store *runstate.Store, beadID, effect
 	if store == nil {
 		return
 	}
-	if err := store.MarkEffect(effect, checkpointKey(beadID, effect, 1), note); err != nil {
+	attempt := stateAttempt(store)
+	if err := store.MarkEffect(effect, checkpointKey(beadID, effect, attempt), note); err != nil {
 		_ = applyFailurePolicy(cmd, stepRunState, err)
 	}
+}
+
+func stateAttempt(store *runstate.Store) int {
+	if store == nil {
+		return 1
+	}
+	state, err := store.Load()
+	if err != nil || state.Attempt <= 0 {
+		return 1
+	}
+	return state.Attempt
 }
 
 // lintBeforeDispatch validates the task (or bead) quality before starting work.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,6 +13,7 @@ func TestCreateAndLoad(t *testing.T) {
 	workDir := t.TempDir()
 	store, err := Create(workDir, Config{
 		BeadID:      "pol-abc",
+		BeadManaged: true,
 		Task:        "resume test",
 		Citizen:     "worker",
 		Repo:        "/tmp/repo",
@@ -29,6 +31,9 @@ func TestCreateAndLoad(t *testing.T) {
 	}
 	if state.BeadID != "pol-abc" {
 		t.Fatalf("bead = %q, want pol-abc", state.BeadID)
+	}
+	if !state.BeadManaged {
+		t.Fatal("bead should be marked managed")
 	}
 	if state.Phase != PhaseInitialized {
 		t.Fatalf("phase = %q, want %q", state.Phase, PhaseInitialized)
@@ -131,4 +136,83 @@ func TestAcquireLeaseAllowsExpiredLease(t *testing.T) {
 	if err := store.AcquireLease("worker-2", time.Minute); err != nil {
 		t.Fatalf("AcquireLease after expiry: %v", err)
 	}
+}
+
+func TestStealLeaseWritesAuditEntry(t *testing.T) {
+	workDir := t.TempDir()
+	store, err := Create(workDir, Config{BeadID: "pol-steal"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.AcquireLease("worker-1", time.Minute); err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+	if err := store.StealLease("worker-2", time.Minute); err != nil {
+		t.Fatalf("StealLease: %v", err)
+	}
+
+	entries, err := store.ReadJournal()
+	if err != nil {
+		t.Fatalf("ReadJournal: %v", err)
+	}
+	found := false
+	for _, entry := range entries {
+		if entry.Kind == "lease_stolen" {
+			found = true
+			if entry.Note == "" || !containsAll(entry.Note, "worker-2", "worker-1") {
+				t.Fatalf("lease_stolen note = %q, want holder and prior holder", entry.Note)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected lease_stolen journal entry")
+	}
+}
+
+func TestBeginResumeIncrementsAttemptAndClearsFailure(t *testing.T) {
+	workDir := t.TempDir()
+	store, err := Create(workDir, Config{BeadID: "pol-resume"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.RecordFailure("gate_check", errors.New("boom")); err != nil {
+		t.Fatalf("RecordFailure: %v", err)
+	}
+
+	state, err := store.BeginResume("operator resume")
+	if err != nil {
+		t.Fatalf("BeginResume: %v", err)
+	}
+	if state.Attempt != 2 {
+		t.Fatalf("attempt = %d, want 2", state.Attempt)
+	}
+	if state.LastError != nil {
+		t.Fatalf("last error = %#v, want nil", state.LastError)
+	}
+
+	entries, err := store.ReadJournal()
+	if err != nil {
+		t.Fatalf("ReadJournal: %v", err)
+	}
+	found := false
+	for _, entry := range entries {
+		if entry.Kind == "resume_started" {
+			found = true
+			if entry.Attempt != 2 {
+				t.Fatalf("resume attempt = %d, want 2", entry.Attempt)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected resume_started journal entry")
+	}
+}
+
+func containsAll(s string, parts ...string) bool {
+	for _, part := range parts {
+		if !strings.Contains(s, part) {
+			return false
+		}
+	}
+	return true
 }

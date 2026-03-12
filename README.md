@@ -109,6 +109,26 @@ work run <task> [flags]
 
 ---
 
+### `work resume <bead-id>`
+
+Resume the latest unfinished `work run` for a bead from checkpointed run state under `~/.work/runs/<run-id>/`.
+
+```
+work resume <bead-id> [flags]
+```
+
+Current scope is intentionally narrow and fail-closed:
+
+- latest unfinished run only
+- post-worker recovery only
+- `--force` steals a fresh lease when the original worker is gone
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | `false` | Steal an active lease for the latest unfinished run |
+
+---
+
 ### `work spawn <citizen>`
 
 Spawn a ready worker session in `tmux` without running a full task lifecycle.
