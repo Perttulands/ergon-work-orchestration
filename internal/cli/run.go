@@ -11,6 +11,7 @@ import (
 	workctx "polis/work/internal/context"
 	"polis/work/internal/ecosystem"
 	"polis/work/internal/index"
+	"polis/work/internal/loopfeed"
 	"polis/work/internal/runstate"
 	"polis/work/internal/squire"
 	"polis/work/internal/trace"
@@ -366,26 +367,25 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		}
 	}
 
-	// Step 8: Learning-loop feedback collection
+	// Step 8: Persist run record for operator inspection and recovery
 	feedbackRecord := buildRunRecord(beadID, citizen, resolvedRuntime, outcome, durationS, gateResult, ctx)
-	if fbErr := ecosystem.CollectFeedback(feedbackRecord, workDir); fbErr != nil {
+	if fbErr := ecosystem.WriteRunRecord(feedbackRecord, workDir); fbErr != nil {
 		if policyErr := applyFailurePolicy(cmd, stepFeedbackCollect, fbErr); policyErr != nil {
 			return policyErr
 		}
 	} else {
-		recordStateEffect(cmd, stateStore, beadID, "feedback_collect", "feedback collected")
-		recordStateCheckpoint(cmd, stateStore, beadID, "feedback_collect", runstate.PhaseFeedbackDone, "feedback collected")
+		recordStateEffect(cmd, stateStore, beadID, "feedback_collect", "run record written")
+		recordStateCheckpoint(cmd, stateStore, beadID, "feedback_collect", runstate.PhaseFeedbackDone, "run record written")
 	}
 
 	// Step 8b: Feed run to learning-loop binary for pattern extraction
 	{
-		testsPassed := gateResult != nil && gateResult.Pass
-		lintPassed := gateResult != nil && gateResult.Pass
 		var errMsg string
 		if spawnErr != nil {
 			errMsg = spawnErr.Error()
 		}
-		if ingestErr := ecosystem.IngestRun(beadID, task, outcome, citizen, durationS, testsPassed, lintPassed, nil, errMsg); ingestErr != nil {
+		entry := buildRunFeedEntry(beadID, task, citizen, model, outcome, durationS, feedbackRecord.TemplateName, feedbackRecord.ExitCode, feedbackRecord.Attempt, feedbackRecord.Verification, nil, errMsg, gateResult)
+		if ingestErr := ecosystem.IngestRun(entry); ingestErr != nil {
 			if policyErr := applyFailurePolicy(cmd, stepLoopIngest, ingestErr); policyErr != nil {
 				return policyErr
 			}
@@ -566,6 +566,37 @@ func stateAttempt(store *runstate.Store) int {
 		return 1
 	}
 	return state.Attempt
+}
+
+func buildRunFeedEntry(beadID, task, citizen, model, outcome string, durationS int64, templateName string, exitCode, attempt int, verification ecosystem.Verification, filesChanged []string, errMsg string, gate *ecosystem.GateResult) FeedEntry {
+	dur := int(durationS)
+	entry := FeedEntry{
+		ID:        beadID,
+		Task:      task,
+		Outcome:   mapOutcome(outcome),
+		DurationS: &dur,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Agent:     citizen,
+		ErrorMsg:  errMsg,
+		Metadata: map[string]any{
+			"bead_id":       beadID,
+			"citizen":       citizen,
+			"work_outcome":  outcome,
+			"model":         model,
+			"template_name": templateName,
+			"exit_code":     exitCode,
+			"attempt":       attempt,
+			"verification":  loopfeed.Verification(verification),
+		},
+	}
+	if len(filesChanged) > 0 {
+		entry.Metadata["files_touched"] = filesChanged
+	}
+	if gate != nil {
+		entry.Metadata["gate_pass"] = gate.Pass
+		entry.Metadata["gate_score"] = gate.Score
+	}
+	return entry
 }
 
 // lintBeforeDispatch validates the task (or bead) quality before starting work.

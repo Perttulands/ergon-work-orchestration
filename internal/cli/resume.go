@@ -145,17 +145,17 @@ func resumePostWorker(cmd *cobra.Command, workDir string, store *runstate.Store,
 
 	if !hasCheckpoint(state, "feedback_collect") {
 		if hasEffect(state, "feedback_collect") || feedbackExists(workDir, state.BeadID) {
-			recordStateEffect(cmd, store, state.BeadID, "feedback_collect", "feedback already collected")
-			recordStateCheckpoint(cmd, store, state.BeadID, "feedback_collect", runstate.PhaseFeedbackDone, "feedback already collected")
+			recordStateEffect(cmd, store, state.BeadID, "feedback_collect", "run record already written")
+			recordStateCheckpoint(cmd, store, state.BeadID, "feedback_collect", runstate.PhaseFeedbackDone, "run record already written")
 		} else {
 			record := buildRunRecord(state.BeadID, state.Citizen, state.Runtime, outcome, meta.DurationS, gateResultFromResume(gatePass, gateScore), nil)
 			record.Attempt = state.Attempt
-			if fbErr := ecosystem.CollectFeedback(record, workDir); fbErr != nil {
+			if fbErr := ecosystem.WriteRunRecord(record, workDir); fbErr != nil {
 				recordResumeFailure(cmd, store, stepFeedbackCollect, fbErr)
-				return fmt.Errorf("feedback collect: %w", fbErr)
+				return fmt.Errorf("write run record: %w", fbErr)
 			}
-			recordStateEffect(cmd, store, state.BeadID, "feedback_collect", "feedback collected")
-			recordStateCheckpoint(cmd, store, state.BeadID, "feedback_collect", runstate.PhaseFeedbackDone, "feedback collected")
+			recordStateEffect(cmd, store, state.BeadID, "feedback_collect", "run record written")
+			recordStateCheckpoint(cmd, store, state.BeadID, "feedback_collect", runstate.PhaseFeedbackDone, "run record written")
 		}
 	}
 
@@ -163,7 +163,10 @@ func resumePostWorker(cmd *cobra.Command, workDir string, store *runstate.Store,
 		if hasEffect(state, "loop_ingest") {
 			recordStateCheckpoint(cmd, store, state.BeadID, "loop_ingest", runstate.PhaseLoopIngested, "loop ingest already committed")
 		} else {
-			if ingestErr := ecosystem.IngestRun(state.BeadID, state.Task, outcome, state.Citizen, meta.DurationS, gatePass != nil && *gatePass, gatePass != nil && *gatePass, nil, resumeErrorMessage(state)); ingestErr != nil {
+			record := buildRunRecord(state.BeadID, state.Citizen, state.Runtime, outcome, meta.DurationS, gateResultFromResume(gatePass, gateScore), nil)
+			record.Attempt = state.Attempt
+			entry := buildRunFeedEntry(state.BeadID, state.Task, state.Citizen, state.Model, outcome, meta.DurationS, record.TemplateName, record.ExitCode, record.Attempt, record.Verification, nil, resumeErrorMessage(state), gateResultFromResume(gatePass, gateScore))
+			if ingestErr := ecosystem.IngestRun(entry); ingestErr != nil {
 				recordResumeFailure(cmd, store, stepLoopIngest, ingestErr)
 				return fmt.Errorf("loop ingest: %w", ingestErr)
 			}
@@ -480,7 +483,7 @@ func shouldCloseBead(state runstate.State) bool {
 }
 
 func feedbackExists(workDir, beadID string) bool {
-	_, err := os.Stat(filepath.Join(workDir, "feedback", beadID+".json"))
+	_, err := os.Stat(filepath.Join(workDir, "run-records", beadID+".json"))
 	return err == nil
 }
 

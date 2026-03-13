@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"polis/work/internal/ecosystem"
+	"polis/work/internal/loopfeed"
 	"polis/work/internal/testutil"
 )
 
@@ -135,7 +136,8 @@ func TestEcosystemDegradationLoop(t *testing.T) {
 		t.Error("loop query should return nil result when unavailable")
 	}
 
-	if err := ecosystem.IngestRun("id", "task", "success", "agent", 60, true, true, nil, ""); err != nil {
+	dur := 60
+	if err := ecosystem.IngestRun(loopfeed.Entry{ID: "id", Task: "task", Outcome: "success", DurationS: &dur, Timestamp: "2026-03-13T00:00:00Z", Agent: "agent"}); err != nil {
 		t.Errorf("loop ingest should return nil, got: %v", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"polis/work/internal/index"
+	"polis/work/internal/loopfeed"
 	"polis/work/internal/trace"
 
 	"github.com/spf13/cobra"
@@ -16,16 +17,7 @@ import (
 // FeedEntry is the stable contract between work and learning-loop.
 // Top-level fields match learning-loop's db.Run schema for direct ingestion.
 // Work-specific fields live in metadata.
-type FeedEntry struct {
-	ID        string         `json:"id"`
-	Task      string         `json:"task"`
-	Outcome   string         `json:"outcome"`
-	DurationS *int           `json:"duration_seconds,omitempty"`
-	Timestamp string         `json:"timestamp"`
-	Agent     string         `json:"agent,omitempty"`
-	ErrorMsg  string         `json:"error_message,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-}
+type FeedEntry = loopfeed.Entry
 
 func newFeedCmd() *cobra.Command {
 	var since string
@@ -87,8 +79,9 @@ func buildFeedEntry(r index.RunRecord) FeedEntry {
 		Timestamp: r.StartTime.Format(time.RFC3339),
 		Agent:     r.Agent,
 		Metadata: map[string]any{
-			"bead_id": r.BeadID,
-			"citizen": r.Agent,
+			"bead_id":      r.BeadID,
+			"citizen":      r.Agent,
+			"work_outcome": r.Outcome,
 		},
 	}
 
@@ -128,13 +121,7 @@ func enrichFromTrace(entry *FeedEntry, tracePath string) {
 // mapOutcome maps work outcomes to learning-loop valid outcomes.
 // Learning-loop accepts: success, partial, failure, error.
 func mapOutcome(outcome string) string {
-	if outcome == "success" {
-		return "success"
-	}
-	if outcome == "gate_fail" {
-		return "failure"
-	}
-	return "error"
+	return loopfeed.MapOutcome(outcome)
 }
 
 func parseSince(s string) (time.Time, error) {

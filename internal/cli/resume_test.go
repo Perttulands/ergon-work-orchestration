@@ -145,8 +145,8 @@ fi`,
 	assertNonEmptyLog(t, relayLog, "relay send should run during resume")
 	assertNonEmptyLog(t, loopLog, "loop ingest should run during resume")
 
-	if _, err := os.Stat(filepath.Join(workDir, "feedback", updated.BeadID+".json")); err != nil {
-		t.Fatalf("feedback artifact missing: %v", err)
+	if _, err := os.Stat(filepath.Join(workDir, "run-records", updated.BeadID+".json")); err != nil {
+		t.Fatalf("run record missing: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workDir, "citizens", updated.Citizen+".md")); err != nil {
 		t.Fatalf("citizen experience missing: %v", err)

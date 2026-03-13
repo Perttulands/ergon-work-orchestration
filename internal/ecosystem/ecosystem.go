@@ -6,16 +6,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	beadsadapter "polis/work/internal/adapters/beads"
 	gateadapter "polis/work/internal/adapters/gate"
 	relayadapter "polis/work/internal/adapters/relay"
+	"polis/work/internal/loopfeed"
 )
 
 // BvSearchResult is one hit from bv --robot-search.
@@ -278,7 +277,6 @@ func loopDB() string {
 	return filepath.Join(home, ".polis", "learning", "loop.db")
 }
 
-
 // TemplateSelection holds the recommendation from select-template.sh.
 type TemplateSelection struct {
 	Template   string   `json:"template"`
@@ -308,12 +306,7 @@ type RunRecord struct {
 }
 
 // Verification holds per-check signals for the run record.
-type Verification struct {
-	Tests      string `json:"tests"`
-	Lint       string `json:"lint"`
-	UBS        string `json:"ubs"`
-	Truthsayer string `json:"truthsayer"`
-}
+type Verification = loopfeed.Verification
 
 // LearningLoopDir returns the learning-loop scripts directory.
 // Checks LEARNING_LOOP_DIR env var, then falls back to well-known path.
@@ -378,27 +371,12 @@ func QueryLearningLoop(task string) ([]byte, error) {
 
 // IngestRun feeds a completed work run to learning-loop for pattern extraction.
 // Returns nil if loop is not on PATH.
-func IngestRun(beadID, task, outcome, agent string, durationSec int64, testsPassed, lintPassed bool, filesChanged []string, errMsg string) error {
+func IngestRun(entry loopfeed.Entry) error {
 	if !Available("loop") {
 		return nil
 	}
 
-	run := map[string]interface{}{
-		"id":               beadID,
-		"task":             task,
-		"outcome":          outcome,
-		"agent":            agent,
-		"duration_seconds": durationSec,
-		"tests_passed":     testsPassed,
-		"lint_passed":      lintPassed,
-		"files_touched":    filesChanged,
-		"timestamp":        time.Now().UTC().Format(time.RFC3339),
-	}
-	if errMsg != "" {
-		run["error_message"] = errMsg
-	}
-
-	data, err := json.Marshal(run)
+	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal run data for ingest: %w", err)
 	}
@@ -411,22 +389,8 @@ func IngestRun(beadID, task, outcome, agent string, durationSec int64, testsPass
 	return nil
 }
 
-// CollectFeedback writes a run record and calls feedback-collector.sh.
-// Returns nil if learning-loop is not available.
-func CollectFeedback(record RunRecord, workDir string) error {
-	dir := LearningLoopDir()
-	if dir == "" {
-		return nil
-	}
-
-	script := filepath.Join(dir, "scripts", "feedback-collector.sh")
-	if _, err := os.Stat(script); err != nil {
-		// Graceful degradation: learning-loop dir exists but script is missing
-		log.Printf("warning: feedback-collector.sh not found: %v", err)
-		return nil
-	}
-
-	// Write run record to temp file
+// WriteRunRecord persists a run record for operator inspection and recovery.
+func WriteRunRecord(record RunRecord, workDir string) error {
 	recordDir := filepath.Join(workDir, "run-records")
 	if err := os.MkdirAll(recordDir, 0o755); err != nil {
 		return fmt.Errorf("create run-records dir: %w", err)
@@ -439,14 +403,6 @@ func CollectFeedback(record RunRecord, workDir string) error {
 	}
 	if err := os.WriteFile(recordPath, data, 0o644); err != nil {
 		return fmt.Errorf("write run record: %w", err)
-	}
-
-	cmd := exec.Command("bash", script, recordPath)
-	cmd.Env = append(os.Environ(),
-		"FEEDBACK_DIR="+filepath.Join(workDir, "feedback"),
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("feedback-collector: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
