@@ -68,6 +68,11 @@ go build -o work ./cmd/work/
 mv work ~/.local/bin/
 ```
 
+## Design Docs
+
+- `docs/runtime-foundations.md` — canonical runtime layering, contracts, recovery, and compatibility rules
+- `docs/runtime-migration-status.md` — what migrated out of the old Prometheus Runtime plan and what remains active
+
 ## CLI Commands
 
 ### Global Flags
