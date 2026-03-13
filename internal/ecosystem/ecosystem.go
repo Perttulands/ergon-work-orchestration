@@ -265,6 +265,20 @@ func GateCheck(repo, citizen string) (*GateResult, error) {
 
 // --- Learning-loop integration ---
 
+// loopDB returns the canonical learning-loop database path.
+// Reads POLIS_LOOP_DB env var; falls back to ~/.polis/learning/loop.db.
+func loopDB() string {
+	if p := os.Getenv("POLIS_LOOP_DB"); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".learning-loop/loop.db"
+	}
+	return filepath.Join(home, ".polis", "learning", "loop.db")
+}
+
+
 // TemplateSelection holds the recommendation from select-template.sh.
 type TemplateSelection struct {
 	Template   string   `json:"template"`
@@ -354,7 +368,7 @@ func QueryLearningLoop(task string) ([]byte, error) {
 	if task == "" {
 		return nil, nil
 	}
-	cmd := exec.Command("loop", "query", task, "--json")
+	cmd := exec.Command("loop", "query", "--db", loopDB(), task, "--json")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("loop query %q: %w", task, err)
@@ -389,7 +403,7 @@ func IngestRun(beadID, task, outcome, agent string, durationSec int64, testsPass
 		return fmt.Errorf("marshal run data for ingest: %w", err)
 	}
 
-	cmd := exec.Command("loop", "ingest", "-")
+	cmd := exec.Command("loop", "ingest", "--db", loopDB(), "-")
 	cmd.Stdin = bytes.NewReader(data)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("loop ingest: %w", err)

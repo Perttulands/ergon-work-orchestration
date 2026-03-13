@@ -353,10 +353,14 @@ func TestFeedOutputLearningLoopCompatible(t *testing.T) {
 func TestFeedRoundTripToLoopQuery(t *testing.T) {
 	loopDB := filepath.Join(t.TempDir(), "loop.jsonl")
 	t.Setenv("MOCK_LOOP_DB", loopDB)
+	t.Setenv("POLIS_LOOP_DB", loopDB)
 	testutil.SandboxPATH(t, map[string]string{
 		"loop": `DB="${MOCK_LOOP_DB:?}"
 cmd="$1"
 shift || true
+if [ "$1" = "--db" ]; then
+  shift 2 || true
+fi
 case "$cmd" in
   ingest)
     cat >> "$DB"
@@ -423,7 +427,7 @@ esac`,
 	if len(lines) != 1 || strings.TrimSpace(lines[0]) == "" {
 		t.Fatalf("feed lines = %q, want one non-empty line", buf.String())
 	}
-	cmd := exec.Command("loop", "ingest", "-")
+	cmd := exec.Command("loop", "ingest", "--db", loopDB, "-")
 	cmd.Stdin = strings.NewReader(lines[0])
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("loop ingest failed: %v (%s)", err, strings.TrimSpace(string(out)))

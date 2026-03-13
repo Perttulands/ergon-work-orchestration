@@ -635,13 +635,15 @@ func TestIngestRunCommandContract(t *testing.T) {
 cat > ` + stdinPath,
 	})
 
+	t.Setenv("POLIS_LOOP_DB", filepath.Join(tmp, "loop.db"))
+
 	err := IngestRun("bead-42", "fix flaky gate contract test", "gate_fail", "zeus", 91, false, false, []string{"internal/cli/run.go"}, "gate failed")
 	if err != nil {
 		t.Fatalf("IngestRun should not error: %v", err)
 	}
 
 	args := readLoggedArgs(t, argsPath)
-	wantArgs := []string{"ingest", "-"}
+	wantArgs := []string{"ingest", "--db", filepath.Join(tmp, "loop.db"), "-"}
 	if !reflect.DeepEqual(args, wantArgs) {
 		t.Fatalf("loop args = %#v, want %#v", args, wantArgs)
 	}
