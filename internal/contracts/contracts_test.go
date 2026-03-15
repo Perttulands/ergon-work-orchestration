@@ -154,20 +154,29 @@ func TestContract_Gate_UBS_Report(t *testing.T) { // integration test
 	if exitCode > 1 {
 		t.Fatalf("ubs exit code = %d, want 0 or 1\nstdout: %s", exitCode, stdout)
 	}
-	// Verify JSON output (newline-delimited)
+	// Verify JSON output — ubs --format=json emits a single JSON object (pretty or compact).
+	// Must be non-empty and parseable as JSON.
 	trimmed := strings.TrimSpace(stdout)
-	if trimmed != "" {
+	if trimmed == "" {
+		t.Fatalf("ubs --format=json produced no output")
+	}
+	var result json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &result); err != nil {
+		// Fallback: try newline-delimited JSON (future ubs versions may change format)
 		lines := strings.Split(trimmed, "\n")
+		jsonCount := 0
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
 			var obj json.RawMessage
-			if err := json.Unmarshal([]byte(line), &obj); err != nil {
-				// ubs may output text headers before JSON — skip non-JSON lines
-				continue
+			if err2 := json.Unmarshal([]byte(line), &obj); err2 == nil {
+				jsonCount++
 			}
+		}
+		if jsonCount == 0 {
+			t.Fatalf("ubs --format=json produced no valid JSON (tried full-doc and NDJSON)\nstdout: %s", stdout)
 		}
 	}
 }
