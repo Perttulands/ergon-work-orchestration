@@ -18,11 +18,13 @@ The forge doesn't care about your intentions. It cares about what comes out the 
 work run "add JWT authentication" --repo myproject
 work spawn hugo --repo myproject     # spawn a ready worker session
 work send agent-hugo "now fix the tests"  # inject a prompt into a running session
-work --strict run "fix flaky auth test" --repo myproject  # fail on optional integration errors
+work run "fix flaky auth test" --repo myproject  # strict mode is on by default
+work --strict=false run "fix flaky auth test" --repo myproject  # explicitly relax optional integrations
 work context <bead-id>         # what should I know before starting this?
 work status                    # what's active right now
 work history                   # recent runs with outcomes
 work trace <bead-id>           # replay a run's timeline
+work spine-parity              # compare legacy work traces with the Polis spine shadow stream
 work feed --since 24h          # structured JSONL for learning-loop
 work deliberate "should we split the auth module?" --type architecture
 work decide "approve deploy?" --evidence pol-abc1,pol-abc2
@@ -66,13 +68,29 @@ go build -o work ./cmd/work/
 mv work ~/.local/bin/
 ```
 
+## Design Docs
+
+- `docs/runtime-foundations.md` — canonical runtime layering, contracts, recovery, and compatibility rules
+- `docs/runtime-migration-status.md` — what migrated out of the old Prometheus Runtime plan and what remains active
+
 ## CLI Commands
 
 ### Global Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--strict` | `false` | Fail on optional integration errors (also set via `WORK_STRICT=1`) |
+| `--strict` | `true` | Fail on optional integration errors by default (set `--strict=false` or `WORK_STRICT=0` to relax) |
+
+---
+
+### Observability Env
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `WORK_SPINE_DUAL_WRITE` | unset | When `1` or `true`, `work run` shadow-writes spine events alongside the legacy trace JSONL/index |
+| `POLIS_SPINE_DIR` | `~/.polis/spine/events` | Override the spine event directory for dual-write and parity checks |
+
+Legacy `work history` and `work trace` remain the operator-facing views during the D15 parity period. Spine output is additive until parity is proven.
 
 ---
 
@@ -93,6 +111,26 @@ work run <task> [flags]
 | `--notify` | `` | Additional agent to notify on completion |
 
 `<task>` may be a free-text description or a bead ID (format: `pol-<2..6 lowercase alnum>`). Bead IDs trigger additional validation via `br show`.
+
+---
+
+### `work resume <bead-id>`
+
+Resume the latest unfinished `work run` for a bead from checkpointed run state under `~/.work/runs/<run-id>/`.
+
+```
+work resume <bead-id> [flags]
+```
+
+Current scope is intentionally narrow and fail-closed:
+
+- latest unfinished run only
+- post-worker recovery only
+- `--force` steals a fresh lease when the original worker is gone
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | `false` | Steal an active lease for the latest unfinished run |
 
 ---
 
@@ -186,6 +224,22 @@ work trace <bead-id> [flags]
 
 ---
 
+### `work spine-parity`
+
+Compare the legacy `~/.work/traces` store against the Polis spine shadow stream. The command exits non-zero if runs are missing or if terminal state, gate verdict, or event ordering drift.
+
+```
+work spine-parity [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--work-dir` | `~/.work` | Work state directory containing legacy traces |
+| `--spine-dir` | `~/.polis/spine/events` | Spine event directory |
+| `--json` | `false` | Output the parity report as JSON |
+
+---
+
 ### `work feed`
 
 Output structured JSONL feed entries for learning-loop consumption.
@@ -193,6 +247,8 @@ Output structured JSONL feed entries for learning-loop consumption.
 ```
 work feed [flags]
 ```
+
+Pass each emitted JSON line to `loop ingest -`, then query the same task later with `loop query "<task>" --json`. This is the supported D17 round-trip contract.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -298,14 +354,14 @@ Both `work run` and `work spawn` resolve runtime from this profile chain. `--run
 
 | Variable | Description |
 |----------|-------------|
-| `WORK_STRICT` | Enable strict failure mode when set to `1`, `true`, `yes`, or `on` |
+| `WORK_STRICT` | Override strict mode: `1`/`true`/`yes`/`on` enables, `0`/`false`/`no`/`off` relaxes |
 | `WORK_RUNTIME_CONFIG` | Path to runtime profile JSON file (highest priority) |
 | `LEARNING_LOOP_DIR` | Base directory for learning-loop scripts; falls back to `~/tools/learning-loop` |
 | `HOME` | Used for all `~/.work` paths and fallback runtime config location |
 
 ### Failure Policy
 
-Default mode: optional integrations degrade gracefully with warnings. Strict mode (`--strict` or `WORK_STRICT=1`): optional integration errors become hard failures.
+Default mode is strict: optional integration errors become hard failures. Relaxed mode requires `--strict=false` or `WORK_STRICT=0`.
 
 ### Filesystem Layout
 
@@ -358,7 +414,7 @@ Default mode: optional integrations degrade gracefully with warnings. Strict mod
 ✅ Shell completions (bash, zsh, fish, powershell)
 
 ⚠️ `BrAgentState` calls (set agent working/idle state) are no-ops by design
-⚠️ The `deep` gate level includes a `risk` gate that always passes — risk scoring not yet implemented
+⚠️ `deep` currently adds full `truthsayer` and `ubs` scans only. There is no separate risk gate until that check is real.
 ⚠️ Learning-loop template selection relies on an external `select-template.sh` script; skipped if absent
 ⚠️ SQLite index rebuild skips individually corrupted trace lines
 

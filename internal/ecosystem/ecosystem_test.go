@@ -1,13 +1,54 @@
 package ecosystem
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
+	"polis/work/internal/loopfeed"
 	"polis/work/internal/testutil"
 )
+
+func readLoggedArgs(t *testing.T, path string) []string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read logged args %s: %v", path, err)
+	}
+
+	raw := bytes.Split(data, []byte{0})
+	if len(raw) > 0 && len(raw[len(raw)-1]) == 0 {
+		raw = raw[:len(raw)-1]
+	}
+
+	args := make([]string, 0, len(raw))
+	for _, item := range raw {
+		args = append(args, string(item))
+	}
+	return args
+}
+
+func testFeedEntry(id, task, outcome, agent string, durationS int, errMsg string) loopfeed.Entry {
+	entry := loopfeed.Entry{
+		ID:        id,
+		Task:      task,
+		Outcome:   outcome,
+		Timestamp: "2026-03-13T00:00:00Z",
+		Agent:     agent,
+	}
+	if durationS > 0 {
+		dur := durationS
+		entry.DurationS = &dur
+	}
+	if errMsg != "" {
+		entry.ErrorMsg = errMsg
+	}
+	return entry
+}
 
 func TestAvailable(t *testing.T) {
 	if !Available("sh") {
@@ -279,7 +320,7 @@ func TestQueryLearningLoopEmptyTask(t *testing.T) {
 func TestIngestRunWhenUnavailable(t *testing.T) {
 	testutil.SandboxPATH(t, nil)
 
-	err := IngestRun("bead-1", "fix a bug", "success", "worker", 120, true, true, nil, "")
+	err := IngestRun(testFeedEntry("bead-1", "fix a bug", "success", "worker", 120, ""))
 	if err != nil {
 		t.Errorf("should return nil error when loop unavailable, got: %v", err)
 	}
@@ -340,16 +381,30 @@ func TestSelectTemplateWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestCollectFeedbackWhenUnavailable(t *testing.T) {
-	t.Setenv("LEARNING_LOOP_DIR", t.TempDir()) // no scripts here
+func TestWriteRunRecord(t *testing.T) {
 	rec := RunRecord{
 		Bead:   "test-bead",
 		Agent:  "test-agent",
 		Status: "done",
 	}
-	err := CollectFeedback(rec, t.TempDir())
+	workDir := t.TempDir()
+	err := WriteRunRecord(rec, workDir)
 	if err != nil {
-		t.Errorf("should return nil error when unavailable, got: %v", err)
+		t.Fatalf("WriteRunRecord should succeed: %v", err)
+	}
+
+	recordPath := filepath.Join(workDir, "run-records", "test-bead.json")
+	data, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatalf("run record not written: %v", err)
+	}
+
+	var written RunRecord
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatalf("invalid run record JSON: %v", err)
+	}
+	if written.Bead != "test-bead" {
+		t.Errorf("bead = %q, want test-bead", written.Bead)
 	}
 }
 
@@ -535,12 +590,47 @@ func TestGateCheckStderrDoesNotContaminateJSON(t *testing.T) {
 	}
 }
 
+func TestGateCheckCommandContract(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "gate.args")
+	pwdPath := filepath.Join(tmp, "gate.pwd")
+
+	testutil.SandboxPATH(t, map[string]string{
+		"gate": `pwd > ` + pwdPath + `
+printf '%s\0' "$@" > ` + argsPath + `
+printf '{"pass":true,"score":0.95}'`,
+	})
+
+	repo := t.TempDir()
+	result, err := GateCheck(repo, "zeus")
+	if err != nil {
+		t.Fatalf("GateCheck should not error: %v", err)
+	}
+	if result == nil || !result.Pass || result.Score != 0.95 {
+		t.Fatalf("unexpected gate result: %#v", result)
+	}
+
+	args := readLoggedArgs(t, argsPath)
+	want := []string{"check", ".", "--json", "--citizen", "zeus"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("gate args = %#v, want %#v", args, want)
+	}
+
+	pwd, err := os.ReadFile(pwdPath)
+	if err != nil {
+		t.Fatalf("read gate pwd: %v", err)
+	}
+	if got := string(bytes.TrimSpace(pwd)); got != repo {
+		t.Fatalf("gate cwd = %q, want %q", got, repo)
+	}
+}
+
 func TestIngestRunWithMock(t *testing.T) {
 	testutil.SandboxPATH(t, map[string]string{
 		"loop": `cat >/dev/null`, // consume stdin
 	})
 
-	err := IngestRun("bead-1", "fix bug", "success", "zeus", 120, true, true, []string{"main.go"}, "")
+	err := IngestRun(testFeedEntry("bead-1", "fix bug", "success", "zeus", 120, ""))
 	if err != nil {
 		t.Errorf("IngestRun should succeed with mock: %v", err)
 	}
@@ -551,7 +641,7 @@ func TestIngestRunWithErrorMessage(t *testing.T) {
 		"loop": `cat >/dev/null`,
 	})
 
-	err := IngestRun("bead-2", "fix bug", "failure", "zeus", 60, false, false, nil, "tests failed")
+	err := IngestRun(testFeedEntry("bead-2", "fix bug", "failure", "zeus", 60, "tests failed"))
 	if err != nil {
 		t.Errorf("IngestRun with error msg should succeed: %v", err)
 	}
@@ -562,9 +652,74 @@ func TestIngestRunError(t *testing.T) {
 		"loop": `exit 1`,
 	})
 
-	err := IngestRun("bead-3", "fix bug", "success", "zeus", 120, true, true, nil, "")
+	err := IngestRun(testFeedEntry("bead-3", "fix bug", "success", "zeus", 120, ""))
 	if err == nil {
 		t.Error("IngestRun should return error when loop fails")
+	}
+}
+
+func TestIngestRunCommandContract(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "loop.args")
+	stdinPath := filepath.Join(tmp, "loop.stdin.json")
+
+	testutil.SandboxPATH(t, map[string]string{
+		"loop": `printf '%s\0' "$@" > ` + argsPath + `
+cat > ` + stdinPath,
+	})
+
+	t.Setenv("POLIS_LOOP_DB", filepath.Join(tmp, "loop.db"))
+	entry := testFeedEntry("bead-42", "fix flaky gate contract test", "failure", "zeus", 91, "gate failed")
+	entry.Metadata = map[string]any{
+		"files_touched": []string{"internal/cli/run.go"},
+	}
+	err := IngestRun(entry)
+	if err != nil {
+		t.Fatalf("IngestRun should not error: %v", err)
+	}
+
+	args := readLoggedArgs(t, argsPath)
+	wantArgs := []string{"ingest", "--db", filepath.Join(tmp, "loop.db"), "-"}
+	if !reflect.DeepEqual(args, wantArgs) {
+		t.Fatalf("loop args = %#v, want %#v", args, wantArgs)
+	}
+
+	data, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatalf("read loop stdin: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal loop payload: %v", err)
+	}
+
+	if payload["id"] != "bead-42" {
+		t.Fatalf("payload id = %v, want bead-42", payload["id"])
+	}
+	if payload["task"] != "fix flaky gate contract test" {
+		t.Fatalf("payload task = %v", payload["task"])
+	}
+	if payload["outcome"] != "failure" {
+		t.Fatalf("payload outcome = %v, want failure", payload["outcome"])
+	}
+	if payload["agent"] != "zeus" {
+		t.Fatalf("payload agent = %v, want zeus", payload["agent"])
+	}
+	if payload["duration_seconds"] != float64(91) {
+		t.Fatalf("payload duration_seconds = %v, want 91", payload["duration_seconds"])
+	}
+	if payload["error_message"] != "gate failed" {
+		t.Fatalf("payload error_message = %v, want gate failed", payload["error_message"])
+	}
+
+	metadata, ok := payload["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("payload metadata = %#v, want object", payload["metadata"])
+	}
+	files, ok := metadata["files_touched"].([]interface{})
+	if !ok || len(files) != 1 || files[0] != "internal/cli/run.go" {
+		t.Fatalf("payload metadata.files_touched = %#v, want [internal/cli/run.go]", metadata["files_touched"])
 	}
 }
 
@@ -656,22 +811,7 @@ func TestSelectTemplateInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestCollectFeedbackWithMockScript(t *testing.T) {
-	dir := t.TempDir()
-	scriptsDir := filepath.Join(dir, "scripts")
-	os.MkdirAll(scriptsDir, 0o755)
-
-	script := filepath.Join(scriptsDir, "feedback-collector.sh")
-	// Write a minimal feedback file so we can verify it ran
-	os.WriteFile(script, []byte(`#!/bin/sh
-RECORD_PATH="$1"
-BEAD=$(cat "$RECORD_PATH" | sed -n 's/.*"bead":"\([^"]*\)".*/\1/p')
-mkdir -p "$FEEDBACK_DIR"
-echo '{"outcome":"full_pass"}' > "$FEEDBACK_DIR/$BEAD.json"
-`), 0o755)
-
-	t.Setenv("LEARNING_LOOP_DIR", dir)
-
+func TestWriteRunRecordOverwritesExistingRecord(t *testing.T) {
 	workDir := t.TempDir()
 	rec := RunRecord{
 		Bead:   "mock-bead-1",
@@ -679,9 +819,9 @@ echo '{"outcome":"full_pass"}' > "$FEEDBACK_DIR/$BEAD.json"
 		Status: "done",
 	}
 
-	err := CollectFeedback(rec, workDir)
+	err := WriteRunRecord(rec, workDir)
 	if err != nil {
-		t.Fatalf("CollectFeedback should succeed: %v", err)
+		t.Fatalf("WriteRunRecord should succeed: %v", err)
 	}
 
 	// Verify run record was written
@@ -697,25 +837,6 @@ echo '{"outcome":"full_pass"}' > "$FEEDBACK_DIR/$BEAD.json"
 	}
 	if written.Bead != "mock-bead-1" {
 		t.Errorf("bead = %q, want mock-bead-1", written.Bead)
-	}
-}
-
-func TestCollectFeedbackScriptError(t *testing.T) {
-	dir := t.TempDir()
-	scriptsDir := filepath.Join(dir, "scripts")
-	os.MkdirAll(scriptsDir, 0o755)
-
-	script := filepath.Join(scriptsDir, "feedback-collector.sh")
-	os.WriteFile(script, []byte("#!/bin/sh\necho 'script failed' >&2\nexit 1\n"), 0o755)
-
-	t.Setenv("LEARNING_LOOP_DIR", dir)
-
-	workDir := t.TempDir()
-	rec := RunRecord{Bead: "fail-bead", Agent: "test", Status: "done"}
-
-	err := CollectFeedback(rec, workDir)
-	if err == nil {
-		t.Error("CollectFeedback should return error when script fails")
 	}
 }
 
@@ -818,12 +939,7 @@ func TestBrCreateError(t *testing.T) {
 	}
 }
 
-func TestCollectFeedbackWritesRunRecord(t *testing.T) {
-	dir := LearningLoopDir()
-	if dir == "" {
-		t.Skip("learning-loop scripts not available")
-	}
-
+func TestWriteRunRecordWithVerification(t *testing.T) {
 	workDir := t.TempDir()
 	rec := RunRecord{
 		Bead:            "test-collect-fb",
@@ -842,9 +958,9 @@ func TestCollectFeedbackWritesRunRecord(t *testing.T) {
 		},
 	}
 
-	err := CollectFeedback(rec, workDir)
+	err := WriteRunRecord(rec, workDir)
 	if err != nil {
-		t.Fatalf("collect feedback failed: %v", err)
+		t.Fatalf("write run record failed: %v", err)
 	}
 
 	// Verify run record was written
@@ -861,21 +977,7 @@ func TestCollectFeedbackWritesRunRecord(t *testing.T) {
 	if written.Bead != "test-collect-fb" {
 		t.Errorf("bead = %q, want test-collect-fb", written.Bead)
 	}
-
-	// Verify feedback was collected
-	feedbackPath := filepath.Join(workDir, "feedback", "test-collect-fb.json")
-	fbData, err := os.ReadFile(feedbackPath)
-	if err != nil {
-		t.Fatalf("feedback not written: %v", err)
-	}
-	var fb map[string]interface{}
-	if err := json.Unmarshal(fbData, &fb); err != nil {
-		t.Fatalf("invalid feedback JSON: %v", err)
-	}
-	// outcome depends on verification signals: "full_pass" if all pass,
-	// "partial_pass" if some are skipped. Both are valid.
-	outcome, _ := fb["outcome"].(string)
-	if outcome != "full_pass" && outcome != "partial_pass" {
-		t.Errorf("outcome = %v, want full_pass or partial_pass", fb["outcome"])
+	if written.Verification.Tests != "pass" {
+		t.Errorf("tests = %q, want pass", written.Verification.Tests)
 	}
 }

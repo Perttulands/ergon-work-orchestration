@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -180,5 +182,64 @@ func TestRunDecideRelayFails(t *testing.T) {
 	// Gate bead should still be created and reported
 	if !strings.Contains(out, "Gate bead:") {
 		t.Error("should still report gate bead even when relay fails")
+	}
+}
+
+func TestRunDecideRelayCommandContract(t *testing.T) {
+	tmp := t.TempDir()
+	relayArgsPath := filepath.Join(tmp, "relay.args")
+
+	testutil.SandboxPATH(t, map[string]string{
+		"relay": `printf '%s\0' "$@" > ` + relayArgsPath,
+		"br":    `echo "gate-bead-contract"`,
+	})
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cmd := &cobra.Command{}
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+
+	if err := runDecide(cmd, "Approve perf optimization?", nil, "athena", "urgent"); err != nil {
+		t.Fatalf("runDecide returned error: %v\noutput: %s", err, buf.String())
+	}
+
+	args := readLoggedArgs(t, relayArgsPath)
+	if len(args) != 11 {
+		t.Fatalf("relay args count = %d, want 11 (%#v)", len(args), args)
+	}
+	if args[0] != "send" || args[1] != "athena" {
+		t.Fatalf("relay target args = %#v, want send athena", args[:2])
+	}
+	if args[3] != "--subject" || args[4] != "Decision: Approve perf optimization?" {
+		t.Fatalf("relay subject args = %#v, want subject contract", args[3:5])
+	}
+	if args[5] != "--thread" || args[6] != "gate-bead-contract" {
+		t.Fatalf("relay thread args = %#v, want gate-bead-contract", args[5:7])
+	}
+	if args[7] != "--priority" || args[8] != "urgent" {
+		t.Fatalf("relay priority args = %#v, want urgent", args[7:9])
+	}
+	if args[9] != "--agent" || args[10] != "work" {
+		t.Fatalf("relay agent args = %#v, want work", args[9:11])
+	}
+
+	message := args[2]
+	checks := []string{
+		"DECISION REQUESTED [urgent]",
+		"Gate: gate-bead-contract",
+		"Question: Approve perf optimization?",
+		"Priority: urgent",
+		"To rule: br close gate-bead-contract --reason",
+	}
+	for _, check := range checks {
+		if !strings.Contains(message, check) {
+			t.Fatalf("relay message missing %q:\n%s", check, message)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(home, ".work")); err != nil {
+		t.Fatalf("expected work dir to exist: %v", err)
 	}
 }

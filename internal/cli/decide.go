@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	beadsadapter "polis/work/internal/adapters/beads"
 	"polis/work/internal/ecosystem"
 
 	"github.com/spf13/cobra"
@@ -116,15 +117,13 @@ func runDecide(cmd *cobra.Command, question string, evidence []string, decider, 
 
 // gatherBeadEvidence retrieves a bead's description for evidence assembly.
 func gatherBeadEvidence(beadID, repo string) string {
-	if !ecosystem.Available("br") {
+	if !beadsadapter.Available() {
 		return ""
 	}
 
-	cmd := exec.Command("br", "show", beadID)
-	cmd.Dir = repo
-	out, err := cmd.Output()
+	out, err := beadsadapter.ShowText(beadID, repo)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(out)
 }

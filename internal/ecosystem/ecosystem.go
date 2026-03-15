@@ -6,12 +6,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
+
+	beadsadapter "polis/work/internal/adapters/beads"
+	gateadapter "polis/work/internal/adapters/gate"
+	relayadapter "polis/work/internal/adapters/relay"
+	"polis/work/internal/loopfeed"
 )
 
 // BvSearchResult is one hit from bv --robot-search.
@@ -77,9 +80,147 @@ type BvPlanResponse struct {
 	} `json:"plan"`
 }
 
-// BvSearch calls bv --robot-search --search "query" and returns matching beads.
-// Returns nil, nil if bv is not available.
+// --- br triage/related/plan (v2) with bv fallback ---
+
+// brTriageResult matches the JSON shape from `br triage --search`.
+type brTriageResult struct {
+	ID       string  `json:"id"`
+	Title    string  `json:"title"`
+	Status   string  `json:"status"`
+	Priority int     `json:"priority"`
+	Score    float64 `json:"score"`
+}
+
+// brTriageResponse matches the JSON shape from `br triage --search`.
+type brTriageResponse struct {
+	Query   string           `json:"query"`
+	Results []brTriageResult `json:"results"`
+	Total   int              `json:"total"`
+}
+
+// brRelatedItem matches the JSON shape from `br related`.
+type brRelatedItem struct {
+	ID           string  `json:"id"`
+	Title        string  `json:"title"`
+	Relationship string  `json:"relationship"`
+	Strength     float64 `json:"strength"`
+}
+
+// brRelatedResponse matches the JSON shape from `br related`.
+type brRelatedResponse struct {
+	TargetBeadID string          `json:"target_bead_id"`
+	Related      []brRelatedItem `json:"related"`
+	TotalRelated int             `json:"total_related"`
+}
+
+// brPlanResponse matches the JSON shape from `br plan`.
+type brPlanResponse = BvPlanResponse // identical structure
+
+// BrTriage calls `br triage --search <query> --json` and returns results
+// in the BvSearchResponse format. Returns nil, nil if br is not available.
+func BrTriage(query, beadsRoot string) (*BvSearchResponse, error) {
+	if !beadsadapter.Available() {
+		return nil, nil
+	}
+	if query == "" {
+		return nil, nil
+	}
+
+	cmd := exec.Command("br", "triage", "--search", query, "--json")
+	cmd.Dir = beadsRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("br triage: %w", err)
+	}
+
+	var resp brTriageResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parse br triage: %w", err)
+	}
+
+	// Convert to BvSearchResponse
+	results := make([]BvSearchResult, len(resp.Results))
+	for i, r := range resp.Results {
+		results[i] = BvSearchResult{
+			IssueID: r.ID,
+			Score:   r.Score,
+			Title:   r.Title,
+		}
+	}
+	return &BvSearchResponse{Results: results}, nil
+}
+
+// BrRelated calls `br related <bead-id> --json` and returns results
+// in the BvRelatedResponse format. Returns nil, nil if br is not available.
+func BrRelated(beadID, beadsRoot string) (*BvRelatedResponse, error) {
+	if !beadsadapter.Available() {
+		return nil, nil
+	}
+	if beadID == "" {
+		return nil, nil
+	}
+
+	cmd := exec.Command("br", "related", beadID, "--json")
+	cmd.Dir = beadsRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("br related: %w", err)
+	}
+
+	var resp brRelatedResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parse br related: %w", err)
+	}
+
+	// Convert to BvRelatedResponse
+	items := make([]BvRelatedItem, len(resp.Related))
+	for i, r := range resp.Related {
+		items[i] = BvRelatedItem{
+			BeadID:       r.ID,
+			Title:        r.Title,
+			Status:       "",
+			RelationType: r.Relationship,
+			Relevance:    int(r.Strength * 10),
+			Reason:       r.Relationship,
+		}
+	}
+	return &BvRelatedResponse{
+		TargetBeadID: resp.TargetBeadID,
+		Concurrent:   items,
+		TotalRelated: resp.TotalRelated,
+	}, nil
+}
+
+// BrPlan calls `br plan --json` and returns results
+// in the BvPlanResponse format. Returns nil, nil if br is not available.
+func BrPlan(beadsRoot string) (*BvPlanResponse, error) {
+	if !beadsadapter.Available() {
+		return nil, nil
+	}
+
+	cmd := exec.Command("br", "plan", "--json")
+	cmd.Dir = beadsRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("br plan: %w", err)
+	}
+
+	var resp BvPlanResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parse br plan: %w", err)
+	}
+	return &resp, nil
+}
+
+// BvSearch calls br triage first, falling back to bv --robot-search.
+// Returns nil, nil if neither is available.
 func BvSearch(query, beadsRoot string) (*BvSearchResponse, error) {
+	// Try br triage first (v2)
+	if resp, err := BrTriage(query, beadsRoot); resp != nil || err != nil {
+		return resp, err
+	}
+
+	// Fallback to bv
 	if !Available("bv") {
 		return nil, nil
 	}
@@ -101,9 +242,15 @@ func BvSearch(query, beadsRoot string) (*BvSearchResponse, error) {
 	return &resp, nil
 }
 
-// BvRelated calls bv --robot-related <bead-id> and returns context on related beads.
-// Returns nil, nil if bv is not available or beadID is empty.
+// BvRelated calls br related first, falling back to bv --robot-related.
+// Returns nil, nil if neither is available or beadID is empty.
 func BvRelated(beadID, beadsRoot string) (*BvRelatedResponse, error) {
+	// Try br related first (v2)
+	if resp, err := BrRelated(beadID, beadsRoot); resp != nil || err != nil {
+		return resp, err
+	}
+
+	// Fallback to bv
 	if !Available("bv") {
 		return nil, nil
 	}
@@ -125,9 +272,15 @@ func BvRelated(beadID, beadsRoot string) (*BvRelatedResponse, error) {
 	return &resp, nil
 }
 
-// BvPlan calls bv --robot-plan and returns the execution plan.
-// Returns nil, nil if bv is not available.
+// BvPlan calls br plan first, falling back to bv --robot-plan.
+// Returns nil, nil if neither is available.
 func BvPlan(beadsRoot string) (*BvPlanResponse, error) {
+	// Try br plan first (v2)
+	if resp, err := BrPlan(beadsRoot); resp != nil || err != nil {
+		return resp, err
+	}
+
+	// Fallback to bv
 	if !Available("bv") {
 		return nil, nil
 	}
@@ -167,63 +320,56 @@ func Available(tool string) bool {
 // BrCreate creates a new bead and returns its ID.
 // Returns empty result with no error if br is not available.
 func BrCreate(title, repo string) (*BeadCreateResult, error) {
-	if !Available("br") {
+	if !beadsadapter.Available() {
 		return nil, nil
 	}
-
-	args := []string{"create", title, "--silent"}
-	cmd := exec.Command("br", args...)
-	cmd.Dir = repo
-	// Use Output() to avoid stderr contamination from br's INFO logs.
-	out, err := cmd.Output()
+	id, err := beadsadapter.Create(title, repo)
 	if err != nil {
-		return nil, fmt.Errorf("br create: %s: %w", strings.TrimSpace(string(out)), err)
+		return nil, err
 	}
-
-	id := strings.TrimSpace(string(out))
 	return &BeadCreateResult{ID: id}, nil
 }
 
 // BrClose closes a bead with a reason.
 func BrClose(id, reason, repo string) error {
-	if !Available("br") {
+	if !beadsadapter.Available() {
 		return nil
 	}
-
-	args := []string{"close", id, "--reason", reason}
-	cmd := exec.Command("br", args...)
-	cmd.Dir = repo
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("br close %s: %s: %w", id, strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return beadsadapter.Close(id, reason, repo)
 }
 
 // BrShow fetches a bead by ID and returns its metadata.
 // Returns nil with no error if br is not available.
 func BrShow(id string) (*BrShowResult, error) {
-	if !Available("br") {
+	if !beadsadapter.Available() {
 		return nil, nil
 	}
 	if strings.TrimSpace(id) == "" {
 		return nil, nil
 	}
 
-	cmd := exec.Command("br", "show", id, "--json")
-	out, err := cmd.Output()
+	out, err := beadsadapter.ShowJSON(id, "")
 	if err != nil {
-		return nil, fmt.Errorf("br show %s: %w", id, err)
+		return nil, err
 	}
 
-	// br show --json returns an array with one element
-	var results []BrShowResult
-	if err := json.Unmarshal(out, &results); err != nil {
-		return nil, fmt.Errorf("parse br show: %w", err)
+	// br show --json returns a single object in v2 (was array in v1).
+	// Try single object first, fall back to array for compatibility.
+	var single BrShowResult
+	if err := json.Unmarshal(out, &single); err != nil {
+		var results []BrShowResult
+		if err2 := json.Unmarshal(out, &results); err2 != nil {
+			return nil, fmt.Errorf("parse br show: %w", err)
+		}
+		if len(results) == 0 {
+			return nil, fmt.Errorf("br show %s: no results", id)
+		}
+		return &results[0], nil
 	}
-	if len(results) == 0 {
-		return nil, fmt.Errorf("br show %s: no results", id)
+	if single.ID == "" {
+		return nil, fmt.Errorf("br show %s: empty result", id)
 	}
-	return &results[0], nil
+	return &single, nil
 }
 
 // BrShowResult is the bead metadata from br show --json.
@@ -248,88 +394,46 @@ func BrAgentState(agent, state string) error {
 // RelayHeartbeat updates the heartbeat for an agent.
 // Returns nil if relay is not available.
 func RelayHeartbeat(agent string) error {
-	if !Available("relay") {
-		return nil
-	}
-	cmd := exec.Command("relay", "heartbeat", "--agent", agent)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("relay heartbeat %s: %s: %w", agent, strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return relayadapter.Heartbeat(agent)
 }
 
 // RelayRegister registers an agent identity on the relay bus.
 // Returns nil if relay is not available.
 func RelayRegister(agent string) error {
-	if !Available("relay") {
-		return nil
-	}
-	if strings.TrimSpace(agent) == "" {
-		return nil
-	}
-	cmd := exec.Command("relay", "register", agent)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("relay register %s: %s: %w", agent, strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return relayadapter.Register(agent)
 }
 
 // RelaySend sends a message from one agent to another, optionally threaded.
 // msgType and payload are optional — pass empty strings to omit.
 // Returns nil if relay is not available.
 func RelaySend(from, to, message, thread, msgType, payload string) error {
-	if !Available("relay") {
-		return nil
-	}
-	args := []string{"send", to, message, "--agent", from}
-	if thread != "" {
-		args = append(args, "--thread", thread)
-	}
-	if msgType != "" {
-		args = append(args, "--type", msgType)
-	}
-	if payload != "" {
-		args = append(args, "--payload", payload)
-	}
-	cmd := exec.Command("relay", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("relay send %s->%s: %s: %w", from, to, strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return relayadapter.Send(from, to, message, thread, msgType, payload)
 }
 
 // GateCheck runs gate check and returns the verdict.
 // Returns nil with no error if gate is not available.
 func GateCheck(repo, citizen string) (*GateResult, error) {
-	if !Available("gate") {
-		return nil, nil
+	result, err := gateadapter.Check(repo, citizen)
+	if result == nil || err != nil {
+		return nil, err
 	}
-
-	args := []string{"check", ".", "--json"}
-	if citizen != "" {
-		args = append(args, "--citizen", citizen)
-	}
-	cmd := exec.Command("gate", args...)
-	cmd.Dir = repo
-	// Use Output() not CombinedOutput() — gate writes JSON to stdout only.
-	// CombinedOutput() captures stderr too, where br's INFO logs leak through
-	// gate's bead.Record calls, contaminating the JSON and breaking parsing.
-	out, err := cmd.Output()
-	raw := strings.TrimSpace(string(out))
-
-	// gate may return non-zero for failures but still produce valid JSON
-	var result GateResult
-	if jsonErr := json.Unmarshal(out, &result); jsonErr != nil {
-		// If JSON parse fails, create result from exit code
-		result.Pass = err == nil
-		result.Raw = raw
-		return &result, nil
-	}
-	result.Raw = raw
-	return &result, nil
+	return &GateResult{Pass: result.Pass, Score: result.Score, Raw: result.Raw}, nil
 }
 
 // --- Learning-loop integration ---
+
+// loopDB returns the canonical learning-loop database path.
+// Reads POLIS_LOOP_DB env var; falls back to ~/.polis/learning/loop.db.
+func loopDB() string {
+	if p := os.Getenv("POLIS_LOOP_DB"); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".learning-loop/loop.db"
+	}
+	return filepath.Join(home, ".polis", "learning", "loop.db")
+}
 
 // TemplateSelection holds the recommendation from select-template.sh.
 type TemplateSelection struct {
@@ -360,12 +464,7 @@ type RunRecord struct {
 }
 
 // Verification holds per-check signals for the run record.
-type Verification struct {
-	Tests      string `json:"tests"`
-	Lint       string `json:"lint"`
-	UBS        string `json:"ubs"`
-	Truthsayer string `json:"truthsayer"`
-}
+type Verification = loopfeed.Verification
 
 // LearningLoopDir returns the learning-loop scripts directory.
 // Checks LEARNING_LOOP_DIR env var, then falls back to well-known path.
@@ -420,7 +519,7 @@ func QueryLearningLoop(task string) ([]byte, error) {
 	if task == "" {
 		return nil, nil
 	}
-	cmd := exec.Command("loop", "query", task, "--json")
+	cmd := exec.Command("loop", "query", "--db", loopDB(), task, "--json")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("loop query %q: %w", task, err)
@@ -430,32 +529,17 @@ func QueryLearningLoop(task string) ([]byte, error) {
 
 // IngestRun feeds a completed work run to learning-loop for pattern extraction.
 // Returns nil if loop is not on PATH.
-func IngestRun(beadID, task, outcome, agent string, durationSec int64, testsPassed, lintPassed bool, filesChanged []string, errMsg string) error {
+func IngestRun(entry loopfeed.Entry) error {
 	if !Available("loop") {
 		return nil
 	}
 
-	run := map[string]interface{}{
-		"id":               beadID,
-		"task":             task,
-		"outcome":          outcome,
-		"agent":            agent,
-		"duration_seconds": durationSec,
-		"tests_passed":     testsPassed,
-		"lint_passed":      lintPassed,
-		"files_touched":    filesChanged,
-		"timestamp":        time.Now().UTC().Format(time.RFC3339),
-	}
-	if errMsg != "" {
-		run["error_message"] = errMsg
-	}
-
-	data, err := json.Marshal(run)
+	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal run data for ingest: %w", err)
 	}
 
-	cmd := exec.Command("loop", "ingest", "-")
+	cmd := exec.Command("loop", "ingest", "--db", loopDB(), "-")
 	cmd.Stdin = bytes.NewReader(data)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("loop ingest: %w", err)
@@ -463,22 +547,8 @@ func IngestRun(beadID, task, outcome, agent string, durationSec int64, testsPass
 	return nil
 }
 
-// CollectFeedback writes a run record and calls feedback-collector.sh.
-// Returns nil if learning-loop is not available.
-func CollectFeedback(record RunRecord, workDir string) error {
-	dir := LearningLoopDir()
-	if dir == "" {
-		return nil
-	}
-
-	script := filepath.Join(dir, "scripts", "feedback-collector.sh")
-	if _, err := os.Stat(script); err != nil {
-		// Graceful degradation: learning-loop dir exists but script is missing
-		log.Printf("warning: feedback-collector.sh not found: %v", err)
-		return nil
-	}
-
-	// Write run record to temp file
+// WriteRunRecord persists a run record for operator inspection and recovery.
+func WriteRunRecord(record RunRecord, workDir string) error {
 	recordDir := filepath.Join(workDir, "run-records")
 	if err := os.MkdirAll(recordDir, 0o755); err != nil {
 		return fmt.Errorf("create run-records dir: %w", err)
@@ -491,14 +561,6 @@ func CollectFeedback(record RunRecord, workDir string) error {
 	}
 	if err := os.WriteFile(recordPath, data, 0o644); err != nil {
 		return fmt.Errorf("write run record: %w", err)
-	}
-
-	cmd := exec.Command("bash", script, recordPath)
-	cmd.Env = append(os.Environ(),
-		"FEEDBACK_DIR="+filepath.Join(workDir, "feedback"),
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("feedback-collector: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

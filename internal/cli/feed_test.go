@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"polis/work/internal/ecosystem"
 	"polis/work/internal/index"
+	"polis/work/internal/testutil"
 
 	"github.com/spf13/cobra"
 )
@@ -344,5 +347,97 @@ func TestFeedOutputLearningLoopCompatible(t *testing.T) {
 	validOutcomes := map[string]bool{"success": true, "partial": true, "failure": true, "error": true}
 	if !validOutcomes[outcome] {
 		t.Errorf("outcome %q is not valid for learning-loop", outcome)
+	}
+}
+
+func TestFeedRoundTripToLoopQuery(t *testing.T) {
+	loopDB := filepath.Join(t.TempDir(), "loop.jsonl")
+	t.Setenv("MOCK_LOOP_DB", loopDB)
+	t.Setenv("POLIS_LOOP_DB", loopDB)
+	testutil.SandboxPATH(t, map[string]string{
+		"loop": `DB="${MOCK_LOOP_DB:?}"
+cmd="$1"
+shift || true
+if [ "$1" = "--db" ]; then
+  shift 2 || true
+fi
+case "$cmd" in
+  ingest)
+    cat >> "$DB"
+    printf '\n' >> "$DB"
+    ;;
+  query)
+    task="$1"
+    first=1
+    printf '['
+    if [ -f "$DB" ]; then
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        if printf '%s\n' "$line" | grep -Fqi "$task"; then
+          if [ "$first" -eq 0 ]; then
+            printf ','
+          fi
+          printf '%s' "$line"
+          first=0
+        fi
+      done < "$DB"
+    fi
+    printf ']\n'
+    ;;
+  *)
+    echo "unsupported loop command: $cmd" >&2
+    exit 1
+    ;;
+esac`,
+	})
+
+	workDir := t.TempDir()
+	homeDir := filepath.Dir(workDir)
+	dotWork := filepath.Join(homeDir, ".work")
+	if err := os.Symlink(workDir, dotWork); err != nil {
+		t.Fatalf("symlink .work: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(dotWork) })
+	t.Setenv("HOME", homeDir)
+
+	now := time.Now().UTC()
+	traceDir := filepath.Join(workDir, "traces", now.Format("2006"), now.Format("01"), now.Format("02"))
+	if err := os.MkdirAll(traceDir, 0o755); err != nil {
+		t.Fatalf("mkdir trace dir: %v", err)
+	}
+	tracePath := filepath.Join(traceDir, "trace-pol-feed-rt.jsonl")
+	traceLines := []string{
+		`{"ts":"` + now.Format(time.RFC3339) + `","event":"begin","trace_id":"trace-feed-rt","session_id":"sess-feed-rt","run_id":"run-feed-rt","agent":"zeus","task":"fix auth timeout","bead":"pol-feed-rt"}`,
+		`{"ts":"` + now.Add(2*time.Minute).Format(time.RFC3339) + `","event":"gate_result","pass":true,"score":0.91}`,
+		`{"ts":"` + now.Add(3*time.Minute).Format(time.RFC3339) + `","event":"end","outcome":"success","duration_s":180,"agent":"zeus","bead":"pol-feed-rt"}`,
+	}
+	if err := os.WriteFile(tracePath, []byte(strings.Join(traceLines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write trace: %v", err)
+	}
+
+	root := NewRoot("test")
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{"feed", "--since", "24h"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("feed failed: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 || strings.TrimSpace(lines[0]) == "" {
+		t.Fatalf("feed lines = %q, want one non-empty line", buf.String())
+	}
+	cmd := exec.Command("loop", "ingest", "--db", loopDB, "-")
+	cmd.Stdin = strings.NewReader(lines[0])
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("loop ingest failed: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	raw, err := ecosystem.QueryLearningLoop("fix auth timeout")
+	if err != nil {
+		t.Fatalf("QueryLearningLoop: %v", err)
+	}
+	if !strings.Contains(string(raw), `"id":"pol-feed-rt"`) {
+		t.Fatalf("loop query output = %s, want pol-feed-rt", string(raw))
 	}
 }

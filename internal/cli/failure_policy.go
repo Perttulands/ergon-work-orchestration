@@ -26,6 +26,7 @@ const (
 	stepRelayRegister     = "relay_register"
 	stepRelayHeartbeat    = "relay_heartbeat"
 	stepContextGather     = "context_gather"
+	stepRunState          = "run_state"
 	stepTraceOpen         = "trace_open"
 	stepGateCheck         = "gate_check"
 	stepIndexOpen         = "index_open"
@@ -46,6 +47,7 @@ var policies = map[string]failurePolicy{
 	stepRelayRegister:     {name: "relay register", mode: failOpen},
 	stepRelayHeartbeat:    {name: "relay heartbeat", mode: failOpen},
 	stepContextGather:     {name: "context gather", mode: failOpen},
+	stepRunState:          {name: "run state", mode: failOpen},
 	stepTraceOpen:         {name: "trace open", mode: failOpen},
 	stepGateCheck:         {name: "gate check", mode: failOpen},
 	stepIndexOpen:         {name: "index open", mode: failOpen},
@@ -62,16 +64,25 @@ var policies = map[string]failurePolicy{
 
 func strictMode(cmd *cobra.Command) bool {
 	if cmd != nil {
-		if strict, err := cmd.Flags().GetBool("strict"); err == nil && strict {
-			return true
+		if flags := cmd.Flags(); flags != nil {
+			if f := flags.Lookup("strict"); f != nil && f.Changed {
+				if strict, err := flags.GetBool("strict"); err == nil {
+					return strict
+				}
+			}
 		}
 	}
 	raw, ok := os.LookupEnv("WORK_STRICT")
-	if !ok {
-		return false
+	if ok {
+		normalized := strings.ToLower(strings.TrimSpace(raw))
+		switch normalized {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		}
 	}
-	normalized := strings.ToLower(strings.TrimSpace(raw))
-	return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+	return true
 }
 
 func applyFailurePolicy(cmd *cobra.Command, step string, err error) error {

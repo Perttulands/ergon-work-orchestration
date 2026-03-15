@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// tmuxBackend abstracts tmux operations for testing.
-type tmuxBackend interface {
+// TmuxClient abstracts tmux operations for testing.
+type TmuxClient interface {
 	requireTmux() error
 	createSession(name, workDir string) error
 	sendKeys(session, keys string) error
@@ -23,7 +23,7 @@ type tmuxBackend interface {
 }
 
 // backend is the active tmux backend. Tests may replace it.
-var backend tmuxBackend = &realTmux{}
+var backend TmuxClient = &RealTmuxClient{}
 
 // Poll/delay intervals. Tests may shorten these.
 var (
@@ -208,18 +208,18 @@ func sendPrompt(session, prompt string) error          { return backend.sendProm
 func capturePane(session string) (string, error)       { return backend.capturePane(session) }
 func killSession(name string) error                    { return backend.killSession(name) }
 
-// --- realTmux implements tmuxBackend using actual tmux commands ---
+// --- RealTmuxClient implements TmuxClient using actual tmux commands ---
 
-type realTmux struct{}
+type RealTmuxClient struct{}
 
-func (r *realTmux) requireTmux() error {
+func (r *RealTmuxClient) requireTmux() error {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		return fmt.Errorf("tmux not found on PATH")
 	}
 	return nil
 }
 
-func (r *realTmux) createSession(name, workDir string) error {
+func (r *RealTmuxClient) createSession(name, workDir string) error {
 	cmd := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", workDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
@@ -227,7 +227,7 @@ func (r *realTmux) createSession(name, workDir string) error {
 	return nil
 }
 
-func (r *realTmux) sendKeys(session, keys string) error {
+func (r *RealTmuxClient) sendKeys(session, keys string) error {
 	cmd := exec.Command("tmux", "send-keys", "-t", session, keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
@@ -242,7 +242,7 @@ func (r *realTmux) sendKeys(session, keys string) error {
 	return r.sendKeysRaw(session, "Enter")
 }
 
-func (r *realTmux) sendKeysRaw(session string, keys ...string) error {
+func (r *RealTmuxClient) sendKeysRaw(session string, keys ...string) error {
 	args := append([]string{"send-keys", "-t", session}, keys...)
 	cmd := exec.Command("tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -251,7 +251,7 @@ func (r *realTmux) sendKeysRaw(session string, keys ...string) error {
 	return nil
 }
 
-func (r *realTmux) sendPrompt(session, prompt string) error {
+func (r *RealTmuxClient) sendPrompt(session, prompt string) error {
 	// Write prompt to a temp file and use tmux load-buffer + paste-buffer.
 	// This is safer than send-keys for multi-line / long prompts because
 	// tmux send-keys interprets special characters and can corrupt text.
@@ -292,7 +292,7 @@ func (r *realTmux) sendPrompt(session, prompt string) error {
 	return r.sendKeysRaw(session, "Enter")
 }
 
-func (r *realTmux) capturePane(session string) (string, error) {
+func (r *RealTmuxClient) capturePane(session string) (string, error) {
 	cmd := exec.Command("tmux", "capture-pane", "-t", session, "-p")
 	out, err := cmd.Output()
 	if err != nil {
@@ -301,7 +301,7 @@ func (r *realTmux) capturePane(session string) (string, error) {
 	return string(out), nil
 }
 
-func (r *realTmux) killSession(name string) error {
+func (r *RealTmuxClient) killSession(name string) error {
 	cmd := exec.Command("tmux", "kill-session", "-t", name)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("kill session %s: %w", name, err)
@@ -309,7 +309,7 @@ func (r *realTmux) killSession(name string) error {
 	return nil
 }
 
-func (r *realTmux) sessionExists(name string) bool {
+func (r *RealTmuxClient) sessionExists(name string) bool {
 	cmd := exec.Command("tmux", "has-session", "-t", name)
 	return cmd.Run() == nil
 }
@@ -459,4 +459,27 @@ func isStillWorking(output string) bool {
 
 func isPromptLine(line string) bool {
 	return strings.HasPrefix(line, "❯") || strings.HasPrefix(line, "›")
+}
+
+// SendFollowUp sends a follow-up message to an existing tmux session.
+// Uses tmux send-keys -l (literal mode) to handle special characters.
+func SendFollowUp(session, message string) error {
+	if !backend.sessionExists(session) {
+		return fmt.Errorf("session %s not found", session)
+	}
+	// Use send-keys -l for literal text (no special character interpretation),
+	// then send Enter to submit.
+	if err := backend.sendKeysRaw(session, "-l", message); err != nil {
+		return fmt.Errorf("send follow-up text: %w", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := backend.sendKeysRaw(session, "Enter"); err != nil {
+		return fmt.Errorf("send follow-up enter: %w", err)
+	}
+	return nil
+}
+
+// WaitForCompletion re-exports waitForCompletion for use by the Squire retry path.
+func WaitForCompletion(session string, maxWait time.Duration) string {
+	return waitForCompletion(session, maxWait)
 }

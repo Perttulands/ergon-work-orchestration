@@ -98,6 +98,26 @@ func FormatCloseReason(cr *CloseReason) string {
 	return strings.Join(parts, ". ")
 }
 
+// CaptureGitDiff returns the combined staged+unstaged diff for the repo.
+// Truncates at 8KB. Returns empty string on any failure (non-fatal).
+func CaptureGitDiff(repo string) string {
+	if repo == "" {
+		return ""
+	}
+	cmd := exec.Command("git", "diff", "HEAD")
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	s := string(out)
+	const maxBytes = 8192
+	if len(s) > maxBytes {
+		s = s[:maxBytes] + "\n[truncated at 8KB]"
+	}
+	return s
+}
+
 func gitDiffStat(repo string) string {
 	if repo == "" {
 		return ""

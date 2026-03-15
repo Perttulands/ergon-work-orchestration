@@ -11,6 +11,9 @@ import (
 	workctx "polis/work/internal/context"
 	"polis/work/internal/ecosystem"
 	"polis/work/internal/index"
+	"polis/work/internal/loopfeed"
+	"polis/work/internal/runstate"
+	"polis/work/internal/squire"
 	"polis/work/internal/trace"
 	"polis/work/internal/worker"
 
@@ -72,6 +75,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	if rtErr != nil {
 		return rtErr
 	}
+	model := worker.ModelForRuntime(resolvedRuntime, citizen)
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -109,15 +113,75 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		cmd.Printf("  Warning: br not on PATH — operating in bead-free mode (ID: %s)\n", beadID)
 	}
 
+	sessionName := fmt.Sprintf("work-%s", beadID)
+	var stateStore *runstate.Store
+	if store, stateErr := runstate.Create(workDir, runstate.Config{
+		BeadID:          beadID,
+		BeadManaged:     bead != nil,
+		Task:            task,
+		Citizen:         citizen,
+		Repo:            repo,
+		Runtime:         resolvedRuntime,
+		Model:           model,
+		Notify:          notify,
+		DeadlineSeconds: int64(deadline.Seconds()),
+		TmuxSession:     sessionName,
+	}); stateErr != nil {
+		if policyErr := applyFailurePolicy(cmd, stepRunState, stateErr); policyErr != nil {
+			return policyErr
+		}
+	} else {
+		stateStore = store
+		cmd.Printf("  Run: %s\n", stateStore.RunID())
+		leaseTTL := deadline + 5*time.Minute
+		if leaseTTL <= 0 {
+			leaseTTL = 35 * time.Minute
+		}
+		if leaseErr := stateStore.AcquireLease(citizen, leaseTTL); leaseErr != nil {
+			if policyErr := applyFailurePolicy(cmd, stepRunState, leaseErr); policyErr != nil {
+				return policyErr
+			}
+		}
+		defer stateStore.ReleaseLease()
+		if bead != nil {
+			if cpErr := stateStore.MarkEffect("br_create", checkpointKey(beadID, "br_create", 1), "bead created via br"); cpErr != nil {
+				if policyErr := applyFailurePolicy(cmd, stepRunState, cpErr); policyErr != nil {
+					return policyErr
+				}
+			}
+		} else if cpErr := stateStore.MarkEffect("local_bead_alloc", checkpointKey(beadID, "local_bead_alloc", 1), "synthetic bead id allocated locally"); cpErr != nil {
+			if policyErr := applyFailurePolicy(cmd, stepRunState, cpErr); policyErr != nil {
+				return policyErr
+			}
+		}
+		if cpErr := stateStore.Checkpoint("bead_created", runstate.PhaseBeadCreated, checkpointKey(beadID, "bead_created", 1), "initial run state created"); cpErr != nil {
+			if policyErr := applyFailurePolicy(cmd, stepRunState, cpErr); policyErr != nil {
+				return policyErr
+			}
+		}
+	}
+
 	// Step 1b: Agent state → working + relay heartbeat
-	if policyErr := applyFailurePolicy(cmd, stepBrAgentWorking, ecosystem.BrAgentState(citizen, "working")); policyErr != nil {
+	agentWorkingErr := ecosystem.BrAgentState(citizen, "working")
+	if policyErr := applyFailurePolicy(cmd, stepBrAgentWorking, agentWorkingErr); policyErr != nil {
 		return policyErr
 	}
-	if policyErr := applyFailurePolicy(cmd, stepRelayRegister, ecosystem.RelayRegister(citizen)); policyErr != nil {
+	if agentWorkingErr == nil {
+		recordStateEffect(cmd, stateStore, beadID, "br_agent_state_working", "agent marked working")
+	}
+	relayRegisterErr := ecosystem.RelayRegister(citizen)
+	if policyErr := applyFailurePolicy(cmd, stepRelayRegister, relayRegisterErr); policyErr != nil {
 		return policyErr
 	}
-	if policyErr := applyFailurePolicy(cmd, stepRelayHeartbeat, ecosystem.RelayHeartbeat(citizen)); policyErr != nil {
+	if relayRegisterErr == nil {
+		recordStateEffect(cmd, stateStore, beadID, "relay_register", "agent registered on relay")
+	}
+	relayHeartbeatErr := ecosystem.RelayHeartbeat(citizen)
+	if policyErr := applyFailurePolicy(cmd, stepRelayHeartbeat, relayHeartbeatErr); policyErr != nil {
 		return policyErr
+	}
+	if relayHeartbeatErr == nil {
+		recordStateEffect(cmd, stateStore, beadID, "relay_heartbeat", "initial heartbeat sent")
 	}
 
 	// Step 2: Gather context
@@ -133,24 +197,54 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		if policyErr := applyFailurePolicy(cmd, stepContextGather, err); policyErr != nil {
 			return policyErr
 		}
+	} else {
+		recordStateCheckpoint(cmd, stateStore, beadID, "context_gather", runstate.PhaseContextReady, "context gathered")
 	}
 
 	// Step 3: Assemble prompt
 	prompt := assemblePrompt(task, citizen, beadID, repo, ctx)
+	if stateStore != nil {
+		if promptErr := stateStore.WritePrompt(prompt); promptErr != nil {
+			if policyErr := applyFailurePolicy(cmd, stepRunState, promptErr); policyErr != nil {
+				return policyErr
+			}
+		} else {
+			recordStateCheckpoint(cmd, stateStore, beadID, "prompt_ready", runstate.PhasePromptReady, "prompt assembled")
+		}
+	}
 
 	// Step 4: Open trace
-	tr, traceErr := trace.Open(workDir, beadID, citizen, task)
+	traceOpts := trace.OpenOptions{
+		Repo:  repo,
+		Model: model,
+	}
+	if stateStore != nil {
+		if state, loadErr := stateStore.Load(); loadErr == nil {
+			traceOpts.RunID = state.RunID
+			traceOpts.TraceID = state.TraceID
+			traceOpts.SessionID = state.SessionID
+		}
+	}
+	tr, traceErr := trace.OpenWithOptions(workDir, beadID, citizen, task, traceOpts)
 	if traceErr != nil {
 		if policyErr := applyFailurePolicy(cmd, stepTraceOpen, traceErr); policyErr != nil {
 			return policyErr
 		}
 	} else {
 		cmd.Printf("  Trace: %s\n", tr.FilePath())
+		if stateStore != nil {
+			if pathErr := stateStore.SetTracePath(tr.FilePath()); pathErr != nil {
+				if policyErr := applyFailurePolicy(cmd, stepRunState, pathErr); policyErr != nil {
+					return policyErr
+				}
+			}
+			recordStateCheckpoint(cmd, stateStore, beadID, "trace_open", runstate.PhaseTraceOpen, tr.FilePath())
+		}
 	}
 
 	// Step 5: Spawn worker
-	sessionName := fmt.Sprintf("work-%s", beadID)
 	cmd.Printf("  Spawning worker in tmux session: %s\n", sessionName)
+	recordStateCheckpoint(cmd, stateStore, beadID, "worker_spawn", runstate.PhaseWorkerRunning, sessionName)
 
 	result, spawnErr := worker.Spawn(worker.Config{
 		SessionName: sessionName,
@@ -170,6 +264,43 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		cmd.Printf("  Worker timed out after %s\n", deadline)
 	} else {
 		cmd.Printf("  Worker finished in %s\n", result.Finished.Sub(result.Started).Round(time.Second))
+	}
+	if stateStore != nil {
+		if outcomeErr := stateStore.SetOutcome(outcome); outcomeErr != nil {
+			if policyErr := applyFailurePolicy(cmd, stepRunState, outcomeErr); policyErr != nil {
+				return policyErr
+			}
+		}
+		recordStateCheckpoint(cmd, stateStore, beadID, "worker_completed", runstate.PhaseWorkerCompleted, outcome)
+	}
+
+	// Step 5b: Squire completion check
+	if spawnErr == nil && !result.TimedOut && squireEnabled() {
+		diff := ecosystem.CaptureGitDiff(repo)
+		verdict, sqErr := squire.Check(task, diff, result.Output)
+		if sqErr != nil {
+			cmd.Printf("  Squire: error (proceeding): %v\n", sqErr)
+		} else if verdict != nil {
+			if tr != nil {
+				tr.Emit(trace.Event{
+					EventType: "squire_verdict",
+					Output:    verdict.Reasoning,
+					Pass:      &verdict.Complete,
+				})
+			}
+			if !verdict.Complete && verdict.FollowUp != "" {
+				cmd.Printf("  Squire: INCOMPLETE — %s\n", verdict.Reasoning)
+				cmd.Printf("  Squire: Re-engaging agent...\n")
+				if sendErr := worker.SendFollowUp(sessionName, verdict.FollowUp); sendErr != nil {
+					cmd.Printf("  Squire: follow-up failed: %v\n", sendErr)
+				} else {
+					retryOutput := worker.WaitForCompletion(sessionName, 5*time.Minute)
+					result.Output = retryOutput
+				}
+			} else {
+				cmd.Printf("  Squire: COMPLETE — %s\n", verdict.Reasoning)
+			}
+		}
 	}
 
 	// Step 6: Gate check
@@ -198,6 +329,7 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 				cmd.Printf("  Gate: FAIL (score: %.2f)\n", gate.Score)
 				outcome = "gate_fail"
 			}
+			recordStateCheckpoint(cmd, stateStore, beadID, "gate_check", runstate.PhaseGateChecked, outcome)
 		} else {
 			gateSkipped = true
 			cmd.Printf("  Warning: gate not on PATH — result is unverified\n")
@@ -213,6 +345,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		meta := tr.GetMetadata(outcome)
 		durationS = meta.DurationS
 		tr.Close(outcome, spawnErr)
+		if shadowErr := tr.ShadowError(); shadowErr != nil {
+			cmd.Printf("  Warning: spine dual-write failed — legacy trace retained: %v\n", shadowErr)
+		}
 
 		// Index the run for fast queries
 		idx, idxErr := index.Open(workDir)
@@ -225,31 +360,38 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 				if policyErr := applyFailurePolicy(cmd, stepIndexRecord, recErr); policyErr != nil {
 					return policyErr
 				}
+			} else {
+				recordStateCheckpoint(cmd, stateStore, beadID, "index_record", runstate.PhaseIndexed, outcome)
 			}
 			idx.Close()
 		}
 	}
 
-	// Step 8: Learning-loop feedback collection
+	// Step 8: Persist run record for operator inspection and recovery
 	feedbackRecord := buildRunRecord(beadID, citizen, resolvedRuntime, outcome, durationS, gateResult, ctx)
-	if fbErr := ecosystem.CollectFeedback(feedbackRecord, workDir); fbErr != nil {
+	if fbErr := ecosystem.WriteRunRecord(feedbackRecord, workDir); fbErr != nil {
 		if policyErr := applyFailurePolicy(cmd, stepFeedbackCollect, fbErr); policyErr != nil {
 			return policyErr
 		}
+	} else {
+		recordStateEffect(cmd, stateStore, beadID, "feedback_collect", "run record written")
+		recordStateCheckpoint(cmd, stateStore, beadID, "feedback_collect", runstate.PhaseFeedbackDone, "run record written")
 	}
 
 	// Step 8b: Feed run to learning-loop binary for pattern extraction
 	{
-		testsPassed := gateResult != nil && gateResult.Pass
-		lintPassed := gateResult != nil && gateResult.Pass
 		var errMsg string
 		if spawnErr != nil {
 			errMsg = spawnErr.Error()
 		}
-		if ingestErr := ecosystem.IngestRun(beadID, task, outcome, citizen, durationS, testsPassed, lintPassed, nil, errMsg); ingestErr != nil {
+		entry := buildRunFeedEntry(beadID, task, citizen, model, outcome, durationS, feedbackRecord.TemplateName, feedbackRecord.ExitCode, feedbackRecord.Attempt, feedbackRecord.Verification, nil, errMsg, gateResult)
+		if ingestErr := ecosystem.IngestRun(entry); ingestErr != nil {
 			if policyErr := applyFailurePolicy(cmd, stepLoopIngest, ingestErr); policyErr != nil {
 				return policyErr
 			}
+		} else {
+			recordStateEffect(cmd, stateStore, beadID, "loop_ingest", outcome)
+			recordStateCheckpoint(cmd, stateStore, beadID, "loop_ingest", runstate.PhaseLoopIngested, outcome)
 		}
 	}
 
@@ -258,6 +400,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 		if policyErr := applyFailurePolicy(cmd, stepExperienceAppend, expErr); policyErr != nil {
 			return policyErr
 		}
+	} else {
+		recordStateEffect(cmd, stateStore, beadID, "experience_append", outcome)
+		recordStateCheckpoint(cmd, stateStore, beadID, "experience_append", runstate.PhaseExperienceDone, outcome)
 	}
 
 	// Step 10: Auto close reason from trace + diff
@@ -273,6 +418,14 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 			cmd.Printf("  Close reason: %s\n", closeReason)
 		}
 	}
+	if stateStore != nil {
+		if reasonErr := stateStore.SetCloseReason(closeReason); reasonErr != nil {
+			if policyErr := applyFailurePolicy(cmd, stepRunState, reasonErr); policyErr != nil {
+				return policyErr
+			}
+		}
+		recordStateCheckpoint(cmd, stateStore, beadID, "close_reason", runstate.PhaseCloseReasonReady, closeReason)
+	}
 
 	// Step 11: Close bead with derived reason
 	if bead != nil {
@@ -280,6 +433,9 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 			if policyErr := applyFailurePolicy(cmd, stepBrClose, closeErr); policyErr != nil {
 				return policyErr
 			}
+		} else {
+			recordStateEffect(cmd, stateStore, beadID, "br_close", closeReason)
+			recordStateCheckpoint(cmd, stateStore, beadID, "bead_close", runstate.PhaseBeadClosed, closeReason)
 		}
 	}
 
@@ -291,22 +447,46 @@ func runTask(cmd *cobra.Command, task, repo, citizen string, deadline time.Durat
 	}
 	relayPayload := fmt.Sprintf(`{"bead_id":"%s","outcome":"%s","gate_score":%s,"duration":"%ds"}`,
 		beadID, outcome, gateScoreStr, durationS)
-	if err := ecosystem.RelaySend(citizen, "athena", summary, beadID, "task_result", relayPayload); err != nil {
-		if policyErr := applyFailurePolicy(cmd, stepRelaySendAthena, err); policyErr != nil {
+	athenaRelayErr := ecosystem.RelaySend(citizen, "athena", summary, beadID, "task_result", relayPayload)
+	if athenaRelayErr != nil {
+		if policyErr := applyFailurePolicy(cmd, stepRelaySendAthena, athenaRelayErr); policyErr != nil {
 			return policyErr
 		}
 	}
+	if athenaRelayErr == nil {
+		recordStateEffect(cmd, stateStore, beadID, "relay_send_athena", summary)
+	}
+	notifyRelayOK := notify == "" || notify == "athena"
 	if notify != "" && notify != "athena" {
-		if err := ecosystem.RelaySend(citizen, notify, summary, beadID, "task_result", relayPayload); err != nil {
-			if policyErr := applyFailurePolicy(cmd, stepRelaySendNotify, err); policyErr != nil {
+		notifyRelayErr := ecosystem.RelaySend(citizen, notify, summary, beadID, "task_result", relayPayload)
+		if notifyRelayErr != nil {
+			if policyErr := applyFailurePolicy(cmd, stepRelaySendNotify, notifyRelayErr); policyErr != nil {
 				return policyErr
 			}
+		} else {
+			notifyRelayOK = true
+			recordStateEffect(cmd, stateStore, beadID, "relay_send_notify", notify)
 		}
+	}
+	if athenaRelayErr == nil && notifyRelayOK {
+		recordStateCheckpoint(cmd, stateStore, beadID, "notifications_sent", runstate.PhaseNotificationsSent, "relay notifications sent")
 	}
 
 	// Step 13: Agent state → idle
-	if policyErr := applyFailurePolicy(cmd, stepBrAgentIdle, ecosystem.BrAgentState(citizen, "idle")); policyErr != nil {
+	agentIdleErr := ecosystem.BrAgentState(citizen, "idle")
+	if policyErr := applyFailurePolicy(cmd, stepBrAgentIdle, agentIdleErr); policyErr != nil {
 		return policyErr
+	}
+	if agentIdleErr == nil {
+		recordStateEffect(cmd, stateStore, beadID, "br_agent_state_idle", "agent returned to idle")
+		recordStateCheckpoint(cmd, stateStore, beadID, "agent_idle", runstate.PhaseAgentIdle, outcome)
+	}
+	if stateStore != nil && agentIdleErr == nil {
+		if completeErr := stateStore.Complete(outcome); completeErr != nil {
+			if policyErr := applyFailurePolicy(cmd, stepRunState, completeErr); policyErr != nil {
+				return policyErr
+			}
+		}
 	}
 
 	if gateSkipped {
@@ -343,14 +523,84 @@ CONSTRAINTS:
 	return prompt
 }
 
+func squireEnabled() bool {
+	return os.Getenv("WORK_SQUIRE") == "1"
+}
+
 func randomID() string {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)
 }
 
+func checkpointKey(beadID, step string, attempt int) string {
+	return fmt.Sprintf("%s:%s:%d", beadID, step, attempt)
+}
+
+func recordStateCheckpoint(cmd *cobra.Command, store *runstate.Store, beadID, step, phase, note string) {
+	if store == nil {
+		return
+	}
+	attempt := stateAttempt(store)
+	if err := store.Checkpoint(step, phase, checkpointKey(beadID, step, attempt), note); err != nil {
+		_ = applyFailurePolicy(cmd, stepRunState, err)
+	}
+}
+
+func recordStateEffect(cmd *cobra.Command, store *runstate.Store, beadID, effect, note string) {
+	if store == nil {
+		return
+	}
+	attempt := stateAttempt(store)
+	if err := store.MarkEffect(effect, checkpointKey(beadID, effect, attempt), note); err != nil {
+		_ = applyFailurePolicy(cmd, stepRunState, err)
+	}
+}
+
+func stateAttempt(store *runstate.Store) int {
+	if store == nil {
+		return 1
+	}
+	state, err := store.Load()
+	if err != nil || state.Attempt <= 0 {
+		return 1
+	}
+	return state.Attempt
+}
+
+func buildRunFeedEntry(beadID, task, citizen, model, outcome string, durationS int64, templateName string, exitCode, attempt int, verification ecosystem.Verification, filesChanged []string, errMsg string, gate *ecosystem.GateResult) FeedEntry {
+	dur := int(durationS)
+	entry := FeedEntry{
+		ID:        beadID,
+		Task:      task,
+		Outcome:   mapOutcome(outcome),
+		DurationS: &dur,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Agent:     citizen,
+		ErrorMsg:  errMsg,
+		Metadata: map[string]any{
+			"bead_id":       beadID,
+			"citizen":       citizen,
+			"work_outcome":  outcome,
+			"model":         model,
+			"template_name": templateName,
+			"exit_code":     exitCode,
+			"attempt":       attempt,
+			"verification":  loopfeed.Verification(verification),
+		},
+	}
+	if len(filesChanged) > 0 {
+		entry.Metadata["files_touched"] = filesChanged
+	}
+	if gate != nil {
+		entry.Metadata["gate_pass"] = gate.Pass
+		entry.Metadata["gate_score"] = gate.Score
+	}
+	return entry
+}
+
 // lintBeforeDispatch validates the task (or bead) quality before starting work.
-// If task looks like a bead ID (pol-xxx), fetches the bead and lints it.
+// If task looks like a bead ID (prefix-suffix), fetches the bead and lints it.
 // Otherwise lints the task title for minimum quality.
 func lintBeforeDispatch(cmd *cobra.Command, task string) error {
 	if beadlint.IsBeadID(task) {

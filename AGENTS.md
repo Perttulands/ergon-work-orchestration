@@ -1,8 +1,12 @@
 # Agent Instructions
 
-This project uses **br** (beads_rust) for issue tracking.
+This project uses **br** (beads-polis v0.1.0) for issue tracking.
 
-**Note:** `br` is non-invasive and never executes git commands. After `br sync --flush-only`, you must manually run `git add .beads/ && git commit`.
+```
+BEADS: Use `POLIS_ACTOR=<agent-name> BEADS_DIR=/home/polis/projects/.beads br <command>`
+Source of truth: /home/polis/projects/.beads/events.jsonl
+Index (derived): /home/polis/projects/.beads/index.db
+```
 
 ## Quick Reference
 
@@ -25,9 +29,6 @@ br close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   br sync --flush-only
-   git add .beads/
-   git commit -m "sync beads"
    git push
    git status  # MUST show "up to date with origin"
    ```

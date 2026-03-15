@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	beadsadapter "polis/work/internal/adapters/beads"
 	"polis/work/internal/ecosystem"
 )
 
@@ -164,7 +165,7 @@ func Gather(cfg Config) (*Result, error) {
 
 // queryBeads searches br for relevant past beads.
 func queryBeads(cfg Config) ([]BeadResult, error) {
-	if _, err := exec.LookPath("br"); err != nil {
+	if !beadsadapter.Available() {
 		return nil, fmt.Errorf("br not on PATH")
 	}
 
@@ -177,12 +178,9 @@ func queryBeads(cfg Config) ([]BeadResult, error) {
 		return nil, fmt.Errorf("no search query available")
 	}
 
-	args := []string{"search", query, "--json", "--limit", "10", "--status", "closed"}
-	cmd := exec.Command("br", args...)
-	cmd.Dir = cfg.Repo
-	out, err := cmd.Output()
+	out, err := beadsadapter.SearchClosed(query, cfg.Repo, 10)
 	if err != nil {
-		return nil, fmt.Errorf("br search: %w", err)
+		return nil, err
 	}
 
 	var beads []BeadResult
@@ -195,17 +193,13 @@ func queryBeads(cfg Config) ([]BeadResult, error) {
 
 // listClosedBeads queries br for all recently closed beads.
 func listClosedBeads(repo string) ([]BeadResult, error) {
-	if _, err := exec.LookPath("br"); err != nil {
+	if !beadsadapter.Available() {
 		return nil, fmt.Errorf("br not on PATH")
 	}
 
-	cmd := exec.Command("br", "list", "--status", "closed", "--json")
-	if repo != "" {
-		cmd.Dir = repo
-	}
-	out, err := cmd.Output()
+	out, err := beadsadapter.ListClosed(repo)
 	if err != nil {
-		return nil, fmt.Errorf("br list: %w", err)
+		return nil, err
 	}
 
 	var beads []BeadResult

@@ -19,14 +19,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"polis/work/internal/spine"
 )
 
 // Event represents a single trace event.
 type Event struct {
 	Timestamp  string   `json:"ts"`
 	EventType  string   `json:"event"`
+	TraceID    string   `json:"trace_id,omitempty"`
+	SessionID  string   `json:"session_id,omitempty"`
+	RunID      string   `json:"run_id,omitempty"`
+	Model      string   `json:"model,omitempty"`
 	Agent      string   `json:"agent,omitempty"`
 	Task       string   `json:"task,omitempty"`
 	Bead       string   `json:"bead,omitempty"`
@@ -45,18 +52,28 @@ type Event struct {
 
 // Trace manages writing events to a JSONL file.
 type Trace struct {
-	mu       sync.Mutex
-	file     *os.File
-	filePath string
-	beadID   string
-	agent    string
-	task     string
-	started  time.Time
+	mu        sync.Mutex
+	file      *os.File
+	filePath  string
+	beadID    string
+	agent     string
+	task      string
+	repo      string
+	traceID   string
+	sessionID string
+	runID     string
+	model     string
+	started   time.Time
+	spine     *spine.Writer
+	shadowErr error
 }
 
 // Metadata holds trace summary info for indexing.
 type Metadata struct {
 	BeadID    string
+	TraceID   string
+	SessionID string
+	RunID     string
 	Agent     string
 	Task      string
 	StartTime time.Time
@@ -66,8 +83,23 @@ type Metadata struct {
 	FilePath  string
 }
 
+type OpenOptions struct {
+	Repo        string
+	Model       string
+	TraceID     string
+	SessionID   string
+	RunID       string
+	EnableSpine bool
+	SpineDir    string
+}
+
 // Open creates a new trace file organized by date.
 func Open(workDir, beadID, agent, task string) (*Trace, error) {
+	return OpenWithOptions(workDir, beadID, agent, task, OpenOptions{})
+}
+
+// OpenWithOptions creates a new trace file and optionally dual-writes to the spine.
+func OpenWithOptions(workDir, beadID, agent, task string, opts OpenOptions) (*Trace, error) {
 	now := time.Now()
 	dir := filepath.Join(workDir, "traces", now.Format("2006"), now.Format("01"), now.Format("02"))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -82,12 +114,29 @@ func Open(workDir, beadID, agent, task string) (*Trace, error) {
 	}
 
 	t := &Trace{
-		file:     f,
-		filePath: filePath,
-		beadID:   beadID,
-		agent:    agent,
-		task:     task,
-		started:  now,
+		file:      f,
+		filePath:  filePath,
+		beadID:    beadID,
+		agent:     agent,
+		task:      task,
+		repo:      opts.Repo,
+		traceID:   opts.TraceID,
+		sessionID: opts.SessionID,
+		runID:     opts.RunID,
+		model:     opts.Model,
+		started:   now,
+	}
+	if t.traceID == "" {
+		t.traceID = spine.MintULID()
+	}
+	if t.sessionID == "" {
+		t.sessionID = spine.MintSessionID()
+	}
+	if t.runID == "" {
+		t.runID = spine.MintRunID()
+	}
+	if opts.EnableSpine || spine.Enabled() {
+		t.spine = spine.NewWriter(opts.SpineDir)
 	}
 
 	t.Emit(Event{
@@ -108,6 +157,18 @@ func (t *Trace) Emit(e Event) error {
 	if e.Timestamp == "" {
 		e.Timestamp = time.Now().Format(time.RFC3339)
 	}
+	if e.TraceID == "" {
+		e.TraceID = t.traceID
+	}
+	if e.SessionID == "" {
+		e.SessionID = t.sessionID
+	}
+	if e.RunID == "" {
+		e.RunID = t.runID
+	}
+	if e.Model == "" {
+		e.Model = t.model
+	}
 
 	data, err := json.Marshal(e)
 	if err != nil {
@@ -116,6 +177,13 @@ func (t *Trace) Emit(e Event) error {
 
 	if _, err := t.file.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("write event: %w", err)
+	}
+	if t.spine != nil {
+		for _, env := range t.toSpineEnvelopes(e) {
+			if err := t.spine.Write(env); err != nil && t.shadowErr == nil {
+				t.shadowErr = err
+			}
+		}
 	}
 	return nil
 }
@@ -178,6 +246,9 @@ func (t *Trace) Close(outcome string, runErr error) error {
 func (t *Trace) GetMetadata(outcome string) Metadata {
 	return Metadata{
 		BeadID:    t.beadID,
+		TraceID:   t.traceID,
+		SessionID: t.sessionID,
+		RunID:     t.runID,
 		Agent:     t.agent,
 		Task:      t.task,
 		StartTime: t.started,
@@ -196,6 +267,165 @@ func (t *Trace) FilePath() string {
 // BeadID returns the bead ID for this trace.
 func (t *Trace) BeadID() string {
 	return t.beadID
+}
+
+// ShadowError returns the first spine dual-write error observed during the run.
+func (t *Trace) ShadowError() error {
+	return t.shadowErr
+}
+
+func (t *Trace) toSpineEnvelopes(e Event) []spine.RawEventEnvelope {
+	base := func(kind string, data map[string]any) spine.RawEventEnvelope {
+		var beadID *string
+		if strings.TrimSpace(t.beadID) != "" {
+			beadID = &t.beadID
+		}
+		var agentID *string
+		if isAgentID(t.agent) {
+			agent := t.agent
+			agentID = &agent
+		}
+		var model *string
+		if strings.TrimSpace(t.model) != "" {
+			model = &t.model
+		}
+		return spine.RawEventEnvelope{
+			ID:        spine.MintULID(),
+			TS:        e.Timestamp,
+			Kind:      kind,
+			TraceID:   t.traceID,
+			SessionID: t.sessionID,
+			RunID:     t.runID,
+			BeadID:    beadID,
+			AgentID:   agentID,
+			Model:     model,
+			Data:      data,
+		}
+	}
+
+	switch e.EventType {
+	case "begin":
+		return []spine.RawEventEnvelope{
+			base("session.start", map[string]any{
+				"cwd":   t.repo,
+				"model": t.model,
+				"mode":  "orchestrated",
+			}),
+			base("agent.start", map[string]any{
+				"agent_name": t.agent,
+				"role":       nil,
+			}),
+		}
+	case "end":
+		return []spine.RawEventEnvelope{
+			base("session.end", map[string]any{
+				"exit_reason": mapOutcome(e.Outcome),
+				"turn_count":  0,
+			}),
+			base("agent.end", map[string]any{
+				"exit_reason": mapAgentExit(e.Outcome),
+			}),
+		}
+	case "tool_call":
+		if e.Tool == "bash" {
+			var duration int64
+			if e.DurationMs != nil {
+				duration = *e.DurationMs
+			}
+			return []spine.RawEventEnvelope{
+				base("bash.run", map[string]any{
+					"command":     e.Cmd,
+					"exit_code":   0,
+					"duration_ms": duration,
+					"stdout":      "",
+					"stderr":      "",
+					"truncated":   false,
+				}),
+			}
+		}
+	case "file_write":
+		lines := 0
+		if e.Lines != nil {
+			lines = *e.Lines
+		}
+		return []spine.RawEventEnvelope{
+			base("file.edit", map[string]any{
+				"path":          e.Path,
+				"lines_changed": lines,
+			}),
+		}
+	case "gate_result":
+		verdict := "error"
+		passed := false
+		if e.Pass != nil {
+			passed = *e.Pass
+			if passed {
+				verdict = "pass"
+			} else {
+				verdict = "fail"
+			}
+		}
+		msg := "score unavailable"
+		if e.Score != nil {
+			msg = fmt.Sprintf("score %.2f", *e.Score)
+		}
+		return []spine.RawEventEnvelope{
+			base("gate.result", map[string]any{
+				"verdict": verdict,
+				"checks": []map[string]any{{
+					"name":    "gate",
+					"passed":  passed,
+					"message": msg,
+				}},
+				"duration_ms": 0,
+			}),
+		}
+	case "error":
+		return []spine.RawEventEnvelope{
+			base("error.tool_failure", map[string]any{
+				"message":         e.Error,
+				"source_event_id": nil,
+				"context": map[string]any{
+					"bead_id": t.beadID,
+				},
+			}),
+		}
+	}
+	return nil
+}
+
+func mapOutcome(outcome string) string {
+	switch outcome {
+	case "success", "gate_fail":
+		return "completed"
+	case "timeout":
+		return "timeout"
+	case "error":
+		return "error"
+	default:
+		return "aborted"
+	}
+}
+
+func mapAgentExit(outcome string) string {
+	switch outcome {
+	case "success", "gate_fail", "timeout":
+		return "completed"
+	default:
+		return "error"
+	}
+}
+
+func isAgentID(agent string) bool {
+	if agent == "" {
+		return false
+	}
+	for _, r := range agent {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 // ReadTrace reads all events from a trace JSONL file.
