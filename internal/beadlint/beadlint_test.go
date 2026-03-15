@@ -242,20 +242,31 @@ func TestIsBeadID(t *testing.T) {
 		input string
 		want  bool
 	}{
+		// existing pol- prefixed IDs
 		{"pol-2dl", true},
 		{"pol-x4r5", true},
 		{"pol-abc", true},
 		{"pol-abcdef", true},
-		{"relay-abc", true},
-		{"projects-i01", true},
 		{"pol-10j3.6", true},
-		{"pol-a", false},       // too short
+
+		// widened: relay-, gate-, sen- prefixes (pol-zyhu)
+		{"relay-abc123", true},
+		{"gate-xy1z", true},
+		{"sen-0001", true},
+		{"projects-i01", true},
+		{"relay-abc", true},
+
+		// invalid formats
+		{"pol-a", false},         // too short ID segment
 		{"pol-abcdefghi", false}, // too long single segment
-		{"relay-", false},
-		{"fix the bug", false},
-		{"", false},
-		{"pol-ABC", false}, // uppercase
-		{"Pol-abc", false}, // uppercase prefix
+		{"relay-", false},        // missing ID
+		{"fix the bug", false},   // not a bead ID
+		{"", false},              // empty
+		{"pol-ABC", false},       // uppercase
+		{"Pol-abc", false},       // uppercase prefix
+		{"a-xx", false},          // single-char prefix too short
+		{"-abc", false},          // no prefix
+		{"123-abc", false},       // numeric prefix start
 	}
 	for _, tt := range tests {
 		got := IsBeadID(tt.input)

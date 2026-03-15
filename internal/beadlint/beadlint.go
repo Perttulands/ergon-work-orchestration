@@ -43,7 +43,7 @@ var validTypes = map[string]bool{
 }
 
 // beadIDPattern matches configurable br IDs like pol-2dl, relay-ab12, or pol-10j3.6.
-var beadIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*-[a-z0-9]{2,8}(?:\.[a-z0-9]{1,8})*$`)
+var beadIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]+-[a-z0-9]{2,8}(?:\.[a-z0-9]{1,8})*$`)
 
 // IsBeadID returns true if s looks like a bead ID.
 func IsBeadID(s string) bool {
