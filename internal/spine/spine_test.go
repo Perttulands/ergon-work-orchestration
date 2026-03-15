@@ -71,8 +71,16 @@ func TestEnabled(t *testing.T) {
 		t.Fatal("Enabled should be true for 1")
 	}
 	t.Setenv(EnableEnv, "")
+	if !Enabled() {
+		t.Fatal("Enabled should be true when unset (default on since Phase 4)")
+	}
+	t.Setenv(EnableEnv, "0")
 	if Enabled() {
-		t.Fatal("Enabled should be false when unset")
+		t.Fatal("Enabled should be false when explicitly set to 0")
+	}
+	t.Setenv(EnableEnv, "false")
+	if Enabled() {
+		t.Fatal("Enabled should be false when explicitly set to false")
 	}
 }
 

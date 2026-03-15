@@ -38,9 +38,14 @@ type Writer struct {
 	mu      sync.Mutex
 }
 
+// Enabled returns true unless WORK_SPINE_DUAL_WRITE is explicitly set to "0" or "false".
+// Dual-write is on by default as of Phase 4.
 func Enabled() bool {
 	v := strings.TrimSpace(os.Getenv(EnableEnv))
-	return v == "1" || strings.EqualFold(v, "true")
+	if v == "" {
+		return true // default: enabled
+	}
+	return v != "0" && !strings.EqualFold(v, "false")
 }
 
 func DefaultDir() string {

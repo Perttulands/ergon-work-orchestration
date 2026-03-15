@@ -62,7 +62,17 @@ func newResumeCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("begin resume: %w", err)
 			}
-			return resumePostWorker(cmd, workDir, store, state)
+
+			if isPostWorker(state) {
+				return resumePostWorker(cmd, workDir, store, state)
+			}
+
+			// Pre-worker crash: re-run the full lifecycle using stored config.
+			// The run already has a bead_id and run state — runTask will use
+			// existing checkpoints to skip completed steps via the state store.
+			cmd.Printf("  Pre-worker crash detected (phase: %s). Re-running task.\n", state.Phase)
+			return runTask(cmd, state.Task, state.Repo, state.Citizen,
+				time.Duration(state.DeadlineSeconds)*time.Second, state.Notify, state.Runtime)
 		},
 	}
 
@@ -70,11 +80,37 @@ func newResumeCmd() *cobra.Command {
 	return cmd
 }
 
+// resumablePhases lists all phases from which resume is supported.
+var resumablePhases = map[string]bool{
+	runstate.PhaseInitialized:     true,
+	runstate.PhaseBeadCreated:     true,
+	runstate.PhaseContextReady:    true,
+	runstate.PhasePromptReady:     true,
+	runstate.PhaseTraceOpen:       true,
+	runstate.PhaseWorkerRunning:   true,
+	runstate.PhaseWorkerCompleted: true,
+	runstate.PhaseGateChecked:     true,
+	runstate.PhaseIndexed:         true,
+	runstate.PhaseFeedbackDone:    true,
+	runstate.PhaseLoopIngested:    true,
+	runstate.PhaseExperienceDone:  true,
+	runstate.PhaseCloseReasonReady: true,
+	runstate.PhaseBeadClosed:      true,
+	runstate.PhaseNotificationsSent: true,
+	runstate.PhaseAgentIdle:       true,
+	runstate.PhaseFailed:          true,
+}
+
 func validateResumeState(state runstate.State) error {
-	if hasCheckpoint(state, "worker_completed") {
+	if resumablePhases[state.Phase] {
 		return nil
 	}
-	return fmt.Errorf("resume from phase %s is not supported yet; only post-worker recovery is enabled", state.Phase)
+	return fmt.Errorf("resume from phase %q is not supported", state.Phase)
+}
+
+// isPostWorker returns true if the run reached worker_completed or later.
+func isPostWorker(state runstate.State) bool {
+	return hasCheckpoint(state, "worker_completed")
 }
 
 func resumePostWorker(cmd *cobra.Command, workDir string, store *runstate.Store, state runstate.State) error {
