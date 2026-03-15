@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os/exec"
@@ -188,5 +189,142 @@ func TestContract_Orbit_Gate_Health(t *testing.T) { // integration test
 	stdout, _, exitCode := runCLI(t, "gate", "health")
 	if exitCode != 0 {
 		t.Fatalf("gate health exit code = %d, want 0\nstdout: %s", exitCode, stdout)
+	}
+}
+
+// --- pol-120g.4: Failure-reproduction logging ---
+
+// TestContractTestResult_JSONReport verifies that a failing ContractTestResult
+// produces valid JSON output containing all diagnostic fields.
+func TestContractTestResult_JSONReport(t *testing.T) {
+	result := ContractTestResult{
+		Tool:             "gate",
+		Args:             []string{"check", "."},
+		ExitCode:         1,
+		Stdout:           "FAIL: some check",
+		Stderr:           "error details here",
+		ExpectedExitCode: 0,
+		ExpectedFields:   []string{"PASS"},
+		Passed:           false,
+		DiagMessage:      "exit code mismatch: got 1, want 0",
+	}
+
+	var buf bytes.Buffer
+	if err := result.ReportJSON(&buf); err != nil {
+		t.Fatalf("ReportJSON: %v", err)
+	}
+
+	// Parse the output and verify all fields are present
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("output not valid JSON: %v\nraw: %s", err, buf.String())
+	}
+
+	requiredFields := []string{"tool", "args", "exit_code", "stdout", "stderr", "expected_exit_code", "passed", "diag_message"}
+	for _, field := range requiredFields {
+		if _, ok := parsed[field]; !ok {
+			t.Errorf("missing required field %q in JSON output", field)
+		}
+	}
+	if parsed["tool"] != "gate" {
+		t.Errorf("tool = %v, want gate", parsed["tool"])
+	}
+	if parsed["passed"] != false {
+		t.Errorf("passed = %v, want false", parsed["passed"])
+	}
+}
+
+// TestContractTestResult_HumanReport verifies the human-readable output
+// contains the command, exit code, and diagnostic message.
+func TestContractTestResult_HumanReport(t *testing.T) {
+	result := ContractTestResult{
+		Tool:             "senate",
+		Args:             []string{"health"},
+		ExitCode:         127,
+		Stdout:           "",
+		Stderr:           "command not found",
+		ExpectedExitCode: 0,
+		Passed:           false,
+		DiagMessage:      "senate binary not found or not executable",
+	}
+
+	var buf bytes.Buffer
+	result.ReportHuman(&buf)
+	output := buf.String()
+
+	if !strings.Contains(output, "CONTRACT FAILURE") {
+		t.Error("human report should contain CONTRACT FAILURE header")
+	}
+	if !strings.Contains(output, "senate health") {
+		t.Error("human report should contain the command")
+	}
+	if !strings.Contains(output, "127") {
+		t.Error("human report should contain actual exit code")
+	}
+	if !strings.Contains(output, "not found or not executable") {
+		t.Error("human report should contain diag message")
+	}
+}
+
+// TestContractTestResult_PassingSkipsHumanReport verifies that passing
+// tests produce no human-readable output.
+func TestContractTestResult_PassingSkipsHumanReport(t *testing.T) {
+	result := ContractTestResult{
+		Tool:   "gate",
+		Args:   []string{"check", "."},
+		Passed: true,
+	}
+
+	var buf bytes.Buffer
+	result.ReportHuman(&buf)
+	if buf.Len() != 0 {
+		t.Errorf("passing test should produce no human output, got: %s", buf.String())
+	}
+}
+
+// TestContractTestResult_FixtureDeliberateFailure is a fixture test that
+// constructs a deliberately wrong expected exit code to verify the diagnostic
+// output contains all required fields. Only activated with -run flag.
+func TestContractTestResult_FixtureDeliberateFailure(t *testing.T) {
+	// This test always passes — it validates the diagnostic struct completeness
+	// by constructing a "would-fail" scenario and checking the report.
+	result := ContractTestResult{
+		Tool:             "echo",
+		Args:             []string{"hello"},
+		ExitCode:         0,
+		Stdout:           "hello\n",
+		Stderr:           "",
+		ExpectedExitCode: 42, // deliberately wrong
+		ExpectedFields:   []string{"goodbye"},
+		Passed:           false,
+		DiagMessage:      "fixture: exit code mismatch: got 0, want 42",
+	}
+
+	// Verify JSON contains all diagnostic fields
+	var jsonBuf bytes.Buffer
+	if err := result.ReportJSON(&jsonBuf); err != nil {
+		t.Fatalf("ReportJSON: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(jsonBuf.Bytes(), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	diagnosticFields := []string{"tool", "args", "exit_code", "stdout", "stderr", "expected_exit_code", "expected_fields", "passed", "diag_message"}
+	for _, f := range diagnosticFields {
+		if _, ok := parsed[f]; !ok {
+			t.Errorf("fixture failure report missing field %q", f)
+		}
+	}
+
+	// Verify human report has key diagnostic info
+	var humanBuf bytes.Buffer
+	result.ReportHuman(&humanBuf)
+	human := humanBuf.String()
+	if !strings.Contains(human, "echo hello") {
+		t.Error("human report should show the command")
+	}
+	if !strings.Contains(human, "fixture") {
+		t.Error("human report should contain diagnostic message")
 	}
 }
