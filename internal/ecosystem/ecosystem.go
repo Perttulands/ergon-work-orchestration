@@ -80,9 +80,156 @@ type BvPlanResponse struct {
 	} `json:"plan"`
 }
 
-// BvSearch calls bv --robot-search --search "query" and returns matching beads.
-// Returns nil, nil if bv is not available.
+// --- br triage/related/plan (v2) with bv fallback ---
+
+// brTriageResult matches the JSON shape from `br triage --search`.
+type brTriageResult struct {
+	ID       string  `json:"id"`
+	Title    string  `json:"title"`
+	Status   string  `json:"status"`
+	Priority int     `json:"priority"`
+	Score    float64 `json:"score"`
+}
+
+// brTriageResponse matches the JSON shape from `br triage --search`.
+type brTriageResponse struct {
+	Query   string           `json:"query"`
+	Results []brTriageResult `json:"results"`
+	Total   int              `json:"total"`
+}
+
+// brRelatedItem matches the JSON shape from `br related`.
+type brRelatedItem struct {
+	ID           string  `json:"id"`
+	Title        string  `json:"title"`
+	Relationship string  `json:"relationship"`
+	Strength     float64 `json:"strength"`
+}
+
+// brRelatedResponse matches the JSON shape from `br related`.
+type brRelatedResponse struct {
+	TargetBeadID string          `json:"target_bead_id"`
+	Related      []brRelatedItem `json:"related"`
+	TotalRelated int             `json:"total_related"`
+}
+
+// brPlanResponse matches the JSON shape from `br plan`.
+type brPlanResponse = BvPlanResponse // identical structure
+
+// BrTriage calls `br triage --search <query> --json` and returns results
+// in the BvSearchResponse format. Returns nil, nil if br is not available.
+func BrTriage(query, beadsRoot string) (*BvSearchResponse, error) {
+	if !beadsadapter.Available() {
+		return nil, nil
+	}
+	if query == "" {
+		return nil, nil
+	}
+
+	cmd := exec.Command("br", "triage", "--search", query, "--json")
+	cmd.Env = brEnv(beadsRoot)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("br triage: %w", err)
+	}
+
+	var resp brTriageResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parse br triage: %w", err)
+	}
+
+	// Convert to BvSearchResponse
+	results := make([]BvSearchResult, len(resp.Results))
+	for i, r := range resp.Results {
+		results[i] = BvSearchResult{
+			IssueID: r.ID,
+			Score:   r.Score,
+			Title:   r.Title,
+		}
+	}
+	return &BvSearchResponse{Results: results}, nil
+}
+
+// BrRelated calls `br related <bead-id> --json` and returns results
+// in the BvRelatedResponse format. Returns nil, nil if br is not available.
+func BrRelated(beadID, beadsRoot string) (*BvRelatedResponse, error) {
+	if !beadsadapter.Available() {
+		return nil, nil
+	}
+	if beadID == "" {
+		return nil, nil
+	}
+
+	cmd := exec.Command("br", "related", beadID, "--json")
+	cmd.Env = brEnv(beadsRoot)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("br related: %w", err)
+	}
+
+	var resp brRelatedResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parse br related: %w", err)
+	}
+
+	// Convert to BvRelatedResponse
+	items := make([]BvRelatedItem, len(resp.Related))
+	for i, r := range resp.Related {
+		items[i] = BvRelatedItem{
+			BeadID:       r.ID,
+			Title:        r.Title,
+			Status:       "",
+			RelationType: r.Relationship,
+			Relevance:    int(r.Strength * 10),
+			Reason:       r.Relationship,
+		}
+	}
+	return &BvRelatedResponse{
+		TargetBeadID: resp.TargetBeadID,
+		Concurrent:   items,
+		TotalRelated: resp.TotalRelated,
+	}, nil
+}
+
+// BrPlan calls `br plan --json` and returns results
+// in the BvPlanResponse format. Returns nil, nil if br is not available.
+func BrPlan(beadsRoot string) (*BvPlanResponse, error) {
+	if !beadsadapter.Available() {
+		return nil, nil
+	}
+
+	cmd := exec.Command("br", "plan", "--json")
+	cmd.Env = brEnv(beadsRoot)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("br plan: %w", err)
+	}
+
+	var resp BvPlanResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parse br plan: %w", err)
+	}
+	return &resp, nil
+}
+
+// brEnv returns the environment for br subcommands, setting BEADS_DIR if beadsRoot is provided.
+func brEnv(beadsRoot string) []string {
+	env := os.Environ()
+	if beadsRoot != "" {
+		env = append(env, "BEADS_DIR="+beadsRoot)
+	}
+	return env
+}
+
+// BvSearch calls br triage first, falling back to bv --robot-search.
+// Returns nil, nil if neither is available.
 func BvSearch(query, beadsRoot string) (*BvSearchResponse, error) {
+	// Try br triage first (v2)
+	if resp, err := BrTriage(query, beadsRoot); resp != nil || err != nil {
+		return resp, err
+	}
+
+	// Fallback to bv
 	if !Available("bv") {
 		return nil, nil
 	}
@@ -104,9 +251,15 @@ func BvSearch(query, beadsRoot string) (*BvSearchResponse, error) {
 	return &resp, nil
 }
 
-// BvRelated calls bv --robot-related <bead-id> and returns context on related beads.
-// Returns nil, nil if bv is not available or beadID is empty.
+// BvRelated calls br related first, falling back to bv --robot-related.
+// Returns nil, nil if neither is available or beadID is empty.
 func BvRelated(beadID, beadsRoot string) (*BvRelatedResponse, error) {
+	// Try br related first (v2)
+	if resp, err := BrRelated(beadID, beadsRoot); resp != nil || err != nil {
+		return resp, err
+	}
+
+	// Fallback to bv
 	if !Available("bv") {
 		return nil, nil
 	}
@@ -128,9 +281,15 @@ func BvRelated(beadID, beadsRoot string) (*BvRelatedResponse, error) {
 	return &resp, nil
 }
 
-// BvPlan calls bv --robot-plan and returns the execution plan.
-// Returns nil, nil if bv is not available.
+// BvPlan calls br plan first, falling back to bv --robot-plan.
+// Returns nil, nil if neither is available.
 func BvPlan(beadsRoot string) (*BvPlanResponse, error) {
+	// Try br plan first (v2)
+	if resp, err := BrPlan(beadsRoot); resp != nil || err != nil {
+		return resp, err
+	}
+
+	// Fallback to bv
 	if !Available("bv") {
 		return nil, nil
 	}
@@ -203,15 +362,23 @@ func BrShow(id string) (*BrShowResult, error) {
 		return nil, err
 	}
 
-	// br show --json returns an array with one element
-	var results []BrShowResult
-	if err := json.Unmarshal(out, &results); err != nil {
-		return nil, fmt.Errorf("parse br show: %w", err)
+	// br show --json returns a single object in v2 (was array in v1).
+	// Try single object first, fall back to array for compatibility.
+	var single BrShowResult
+	if err := json.Unmarshal(out, &single); err != nil {
+		var results []BrShowResult
+		if err2 := json.Unmarshal(out, &results); err2 != nil {
+			return nil, fmt.Errorf("parse br show: %w", err)
+		}
+		if len(results) == 0 {
+			return nil, fmt.Errorf("br show %s: no results", id)
+		}
+		return &results[0], nil
 	}
-	if len(results) == 0 {
-		return nil, fmt.Errorf("br show %s: no results", id)
+	if single.ID == "" {
+		return nil, fmt.Errorf("br show %s: empty result", id)
 	}
-	return &results[0], nil
+	return &single, nil
 }
 
 // BrShowResult is the bead metadata from br show --json.
