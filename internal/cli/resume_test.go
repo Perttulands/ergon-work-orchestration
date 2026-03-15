@@ -24,12 +24,12 @@ func TestResumeCommandExists(t *testing.T) {
 	t.Fatal("resume command should be registered")
 }
 
-func TestResumeCommandRejectsUnsupportedPhase(t *testing.T) {
+func TestResumeCommandHandlesPreWorkerCrash(t *testing.T) {
 	_, workDir := configureWorkHome(t)
 	store, err := runstate.Create(workDir, runstate.Config{
-		BeadID:      "pol-resume-unsupported",
+		BeadID:      "pol-resume-precrash",
 		BeadManaged: true,
-		Task:        "resume unsupported",
+		Task:        "pre-worker crash recovery test for resume functionality",
 		Citizen:     "zeus",
 		Repo:        t.TempDir(),
 		Runtime:     "codex",
@@ -41,14 +41,16 @@ func TestResumeCommandRejectsUnsupportedPhase(t *testing.T) {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 
+	// Pre-worker resume now calls runTask, which will fail (no tmux, no agent)
+	// but it should NOT fail with "only post-worker recovery is enabled"
 	root := NewRoot("test")
-	root.SetArgs([]string{"resume", "pol-resume-unsupported"})
+	root.SetArgs([]string{"resume", "pol-resume-precrash"})
 	err = root.Execute()
 	if err == nil {
-		t.Fatal("resume should fail for pre-worker phases")
+		t.Fatal("resume should fail (no agent available), but should attempt the run")
 	}
-	if !strings.Contains(err.Error(), "only post-worker recovery is enabled") {
-		t.Fatalf("resume error = %v, want post-worker message", err)
+	if strings.Contains(err.Error(), "only post-worker recovery is enabled") {
+		t.Fatalf("resume should not reject pre-worker phases anymore, got: %v", err)
 	}
 }
 
@@ -488,4 +490,106 @@ func journalHasKind(entries []runstate.JournalEntry, kind string) bool {
 		}
 	}
 	return false
+}
+
+// --- pol-04e3: crash recovery tests ---
+
+// TestResumeCommandMidWorkerCrash simulates a crash during the worker phase
+// (phase=worker_running, no worker_completed checkpoint). Resume should detect
+// this as a pre-worker crash and re-run the task from scratch.
+func TestResumeCommandMidWorkerCrash(t *testing.T) {
+	_, workDir := configureWorkHome(t)
+	store, err := runstate.Create(workDir, runstate.Config{
+		BeadID:      "pol-midcrash-01",
+		BeadManaged: true,
+		Task:        "mid-worker crash recovery test for resume",
+		Citizen:     "zeus",
+		Repo:        t.TempDir(),
+		Runtime:     "codex",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Simulate: bead created → context ready → worker running → crash
+	if err := store.Checkpoint("bead_create", runstate.PhaseBeadCreated, "ck-1", "bead created"); err != nil {
+		t.Fatalf("Checkpoint bead_create: %v", err)
+	}
+	if err := store.Checkpoint("context_gather", runstate.PhaseContextReady, "ck-2", "context ready"); err != nil {
+		t.Fatalf("Checkpoint context_gather: %v", err)
+	}
+	if err := store.Checkpoint("worker_spawn", runstate.PhaseWorkerRunning, "ck-3", "worker spawned"); err != nil {
+		t.Fatalf("Checkpoint worker_spawn: %v", err)
+	}
+
+	// Resume should detect pre-worker crash (no worker_completed checkpoint)
+	// and attempt to re-run the task via runTask, which will fail (no tmux/agent)
+	// but the key assertion is that it doesn't reject the phase.
+	root := NewRoot("test")
+	root.SetArgs([]string{"resume", "pol-midcrash-01"})
+	err = root.Execute()
+	if err == nil {
+		t.Fatal("resume should fail (no agent), but should attempt the run")
+	}
+	// Should NOT say "only post-worker recovery" or "not supported"
+	if strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("resume should accept worker_running phase, got: %v", err)
+	}
+
+	// Verify state: attempt should have been incremented by BeginResume
+	state, loadErr := store.Load()
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
+	}
+	if state.Attempt < 2 {
+		t.Fatalf("attempt = %d, want >= 2 (BeginResume should increment)", state.Attempt)
+	}
+}
+
+// TestResumeCommandNoRunState verifies that resuming a bead with no prior
+// run state produces a clear error.
+func TestResumeCommandNoRunState(t *testing.T) {
+	configureWorkHome(t)
+
+	root := NewRoot("test")
+	root.SetArgs([]string{"resume", "pol-nonexistent-99"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("resume should fail when no run state exists")
+	}
+	if !strings.Contains(err.Error(), "unfinished") && !strings.Contains(err.Error(), "no run") && !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("error should indicate no run state found, got: %v", err)
+	}
+}
+
+// TestResumeCommandAlreadyCompleted verifies that resuming a bead whose
+// latest run is already completed produces a clear error (not silently
+// re-running or corrupting state).
+func TestResumeCommandAlreadyCompleted(t *testing.T) {
+	_, workDir := configureWorkHome(t)
+	store, err := runstate.Create(workDir, runstate.Config{
+		BeadID:      "pol-alreadydone-01",
+		BeadManaged: true,
+		Task:        "already completed run should not be resumable",
+		Citizen:     "zeus",
+		Repo:        t.TempDir(),
+		Runtime:     "codex",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Mark as completed
+	if err := store.Complete("success"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	root := NewRoot("test")
+	root.SetArgs([]string{"resume", "pol-alreadydone-01"})
+	err = root.Execute()
+	if err == nil {
+		t.Fatal("resume should fail for already completed run")
+	}
+	if !strings.Contains(err.Error(), "unfinished") && !strings.Contains(err.Error(), "completed") && !strings.Contains(err.Error(), "no run") && !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("error should indicate run is completed, got: %v", err)
+	}
 }
