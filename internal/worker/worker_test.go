@@ -11,7 +11,7 @@ import (
 	"polis/work/internal/testutil"
 )
 
-// --- fakeTmux implements tmuxBackend for deterministic, instant tests ---
+// --- FakeTmuxClient implements tmuxBackend for deterministic, instant tests ---
 
 type fakeSession struct {
 	workDir string
@@ -19,27 +19,27 @@ type fakeSession struct {
 	onEnter func(*fakeSession) // called when "Enter" is sent via sendKeysRaw
 }
 
-type fakeTmux struct {
+type FakeTmuxClient struct {
 	mu        sync.Mutex
 	sessions  map[string]*fakeSession
 	tmuxAvail bool
 }
 
-func newFakeTmux() *fakeTmux {
-	return &fakeTmux{
+func NewFakeTmuxClient() *FakeTmuxClient {
+	return &FakeTmuxClient{
 		sessions:  make(map[string]*fakeSession),
 		tmuxAvail: true,
 	}
 }
 
-func (f *fakeTmux) requireTmux() error {
+func (f *FakeTmuxClient) requireTmux() error {
 	if !f.tmuxAvail {
 		return fmt.Errorf("tmux not found on PATH")
 	}
 	return nil
 }
 
-func (f *fakeTmux) createSession(name, workDir string) error {
+func (f *FakeTmuxClient) createSession(name, workDir string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, exists := f.sessions[name]; exists {
@@ -49,7 +49,7 @@ func (f *fakeTmux) createSession(name, workDir string) error {
 	return nil
 }
 
-func (f *fakeTmux) sendKeys(session, keys string) error {
+func (f *FakeTmuxClient) sendKeys(session, keys string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.sessions[session]
@@ -60,7 +60,7 @@ func (f *fakeTmux) sendKeys(session, keys string) error {
 	return nil
 }
 
-func (f *fakeTmux) sendKeysRaw(session string, keys ...string) error {
+func (f *FakeTmuxClient) sendKeysRaw(session string, keys ...string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.sessions[session]
@@ -80,7 +80,7 @@ func (f *fakeTmux) sendKeysRaw(session string, keys ...string) error {
 	return nil
 }
 
-func (f *fakeTmux) sendPrompt(session, prompt string) error {
+func (f *FakeTmuxClient) sendPrompt(session, prompt string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.sessions[session]
@@ -91,7 +91,7 @@ func (f *fakeTmux) sendPrompt(session, prompt string) error {
 	return nil
 }
 
-func (f *fakeTmux) capturePane(session string) (string, error) {
+func (f *FakeTmuxClient) capturePane(session string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.sessions[session]
@@ -101,7 +101,7 @@ func (f *fakeTmux) capturePane(session string) (string, error) {
 	return s.pane, nil
 }
 
-func (f *fakeTmux) killSession(name string) error {
+func (f *FakeTmuxClient) killSession(name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.sessions[name]; !ok {
@@ -111,7 +111,7 @@ func (f *fakeTmux) killSession(name string) error {
 	return nil
 }
 
-func (f *fakeTmux) sessionExists(name string) bool {
+func (f *FakeTmuxClient) sessionExists(name string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	_, ok := f.sessions[name]
@@ -119,17 +119,17 @@ func (f *fakeTmux) sessionExists(name string) bool {
 }
 
 // addSession pre-creates a session with specific pane content.
-func (f *fakeTmux) addSession(name, workDir, pane string) {
+func (f *FakeTmuxClient) addSession(name, workDir, pane string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sessions[name] = &fakeSession{workDir: workDir, pane: pane}
 }
 
-// useFake installs a fakeTmux as the backend, shortens poll intervals,
+// useFake installs a FakeTmuxClient as the backend, shortens poll intervals,
 // and restores everything on test cleanup.
-func useFake(t *testing.T) *fakeTmux {
+func useFake(t *testing.T) *FakeTmuxClient {
 	t.Helper()
-	fake := newFakeTmux()
+	fake := NewFakeTmuxClient()
 
 	origBackend := backend
 	origReadyPoll := readyPollInterval
@@ -546,11 +546,9 @@ func TestWaitForCompletionSessionKilled(t *testing.T) {
 	// Session with no completion markers
 	fake.addSession(name, "/tmp", "some preliminary output\nstill running...")
 
-	// Kill session after a tiny delay
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		fake.killSession(name)
-	}()
+	// Kill session immediately — completionPollInterval is 1ms so it will be
+	// detected on the next poll cycle without any sleep.
+	fake.killSession(name)
 
 	// waitForCompletion should return when session dies
 	output := waitForCompletion(name, 1*time.Second)
@@ -625,9 +623,9 @@ func TestWaitForCompletionMaxWait(t *testing.T) {
 
 // --- integration tests: exercise realTmux methods via SandboxPATH fake tmux ---
 
-// fakeTmuxScript is a shell script that mimics tmux using temp files for state.
+// FakeTmuxClientScript is a shell script that mimics tmux using temp files for state.
 // SandboxPATH prepends "#!/bin/sh\nset -e\n" so we just provide the body.
-const fakeTmuxScript = `
+const FakeTmuxClientScript = `
 DIR="$FAKE_TMUX_DIR"
 mkdir -p "$DIR"
 case "$1" in
@@ -682,14 +680,17 @@ func useRealWithSandboxTmux(t *testing.T) {
 	t.Helper()
 	stateDir := t.TempDir()
 	t.Setenv("FAKE_TMUX_DIR", stateDir)
-	testutil.SandboxPATH(t, map[string]string{"tmux": fakeTmuxScript})
+	testutil.SandboxPATH(t, map[string]string{"tmux": FakeTmuxClientScript})
 
 	origBackend := backend
-	backend = &realTmux{}
+	backend = &RealTmuxClient{}
 	t.Cleanup(func() { backend = origBackend })
 }
 
-func TestRealTmuxSessionLifecycle(t *testing.T) {
+func TestRealTmuxSessionLifecycle(t *testing.T) { // integration test
+	if testing.Short() {
+		t.Skip("integration test: skipped in short mode")
+	}
 	useRealWithSandboxTmux(t)
 	name := t.Name()
 
@@ -720,7 +721,10 @@ func TestRealTmuxSessionLifecycle(t *testing.T) {
 	}
 }
 
-func TestRealTmuxSendAndCapture(t *testing.T) {
+func TestRealTmuxSendAndCapture(t *testing.T) { // integration test
+	if testing.Short() {
+		t.Skip("integration test: skipped in short mode")
+	}
 	useRealWithSandboxTmux(t)
 	name := t.Name()
 
@@ -770,7 +774,10 @@ func TestRealTmuxSendAndCapture(t *testing.T) {
 	}
 }
 
-func TestRealTmuxSendPrompt(t *testing.T) {
+func TestRealTmuxSendPrompt(t *testing.T) { // integration test
+	if testing.Short() {
+		t.Skip("integration test: skipped in short mode")
+	}
 	useRealWithSandboxTmux(t)
 	name := t.Name()
 
@@ -797,7 +804,10 @@ func TestRealTmuxSendPrompt(t *testing.T) {
 	}
 }
 
-func TestRealTmuxRequire(t *testing.T) {
+func TestRealTmuxRequire(t *testing.T) { // integration test
+	if testing.Short() {
+		t.Skip("integration test: skipped in short mode")
+	}
 	useRealWithSandboxTmux(t)
 	// Fake tmux is on PATH — should succeed
 	if err := requireTmux(); err != nil {
@@ -877,15 +887,8 @@ func TestSendFollowUpSessionNotFound(t *testing.T) {
 
 func TestWaitForCompletionExported(t *testing.T) {
 	fake := useFake(t)
-	fake.sessions["wfc-session"] = &fakeSession{pane: "working..."}
-
-	// Set pane to idle after a brief moment
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		fake.mu.Lock()
-		fake.sessions["wfc-session"].pane = "done\n❯ "
-		fake.mu.Unlock()
-	}()
+	// Pre-set pane to already-complete state — no goroutine/sleep needed.
+	fake.sessions["wfc-session"] = &fakeSession{pane: "done\nall good\n❯ "}
 
 	output := WaitForCompletion("wfc-session", 2*time.Second)
 	if !strings.Contains(output, "❯") {
