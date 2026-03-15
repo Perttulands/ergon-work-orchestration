@@ -127,7 +127,7 @@ func BrTriage(query, beadsRoot string) (*BvSearchResponse, error) {
 	}
 
 	cmd := exec.Command("br", "triage", "--search", query, "--json")
-	cmd.Env = brEnv(beadsRoot)
+	cmd.Dir = beadsRoot
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("br triage: %w", err)
@@ -161,7 +161,7 @@ func BrRelated(beadID, beadsRoot string) (*BvRelatedResponse, error) {
 	}
 
 	cmd := exec.Command("br", "related", beadID, "--json")
-	cmd.Env = brEnv(beadsRoot)
+	cmd.Dir = beadsRoot
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("br related: %w", err)
@@ -199,7 +199,7 @@ func BrPlan(beadsRoot string) (*BvPlanResponse, error) {
 	}
 
 	cmd := exec.Command("br", "plan", "--json")
-	cmd.Env = brEnv(beadsRoot)
+	cmd.Dir = beadsRoot
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("br plan: %w", err)
@@ -210,15 +210,6 @@ func BrPlan(beadsRoot string) (*BvPlanResponse, error) {
 		return nil, fmt.Errorf("parse br plan: %w", err)
 	}
 	return &resp, nil
-}
-
-// brEnv returns the environment for br subcommands, setting BEADS_DIR if beadsRoot is provided.
-func brEnv(beadsRoot string) []string {
-	env := os.Environ()
-	if beadsRoot != "" {
-		env = append(env, "BEADS_DIR="+beadsRoot)
-	}
-	return env
 }
 
 // BvSearch calls br triage first, falling back to bv --robot-search.
