@@ -64,7 +64,7 @@ func TestSpawnCommandInvalidRuntime(t *testing.T) {
 	}
 }
 
-func TestSpawnCommandRelayFailureWarnsByDefault(t *testing.T) {
+func TestSpawnCommandRelayFailureWarnsInRelaxedMode(t *testing.T) {
 	tmuxScript := `
 case "$1" in
   has-session)  exit 1 ;;
@@ -87,7 +87,7 @@ esac
 	root.SetArgs([]string{"spawn", "hugo", "--repo", t.TempDir(), "--session", "agent-hugo-warn"})
 
 	if err := root.Execute(); err != nil {
-		t.Fatalf("spawn should continue in non-strict mode, got error: %v\noutput: %s", err, buf.String())
+		t.Fatalf("spawn should continue in relaxed mode, got error: %v\noutput: %s", err, buf.String())
 	}
 	out := buf.String()
 	if !strings.Contains(out, "Warning: relay register:") {

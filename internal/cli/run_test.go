@@ -405,7 +405,7 @@ esac
 		"tmux": tmuxScript,
 		"git":  `echo "deadbeef commit msg"`,
 	})
-	t.Setenv("WORK_STRICT", "0")
+	t.Setenv("WORK_STRICT", "0") // bead-free mode requires relaxed: br commands are absent by design
 
 	workDir := t.TempDir()
 	homeDir := filepath.Dir(workDir)
