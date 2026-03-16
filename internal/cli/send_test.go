@@ -11,10 +11,8 @@ import (
 )
 
 // These tests mock the tmux binary via SandboxPATH and exercise the send
-// command path that uses:
-// 1. tmux has-session -t <session>
-// 2. tmux send-keys -t <session> -l <prompt>
-// 3. tmux send-keys -t <session> Enter
+// command path that delegates to worker.SessionExists and worker.SendPrompt
+// (which uses tmux load-buffer + paste-buffer internally).
 
 func tmuxMockAcceptAll() string {
 	return `#!/bin/bash
