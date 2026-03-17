@@ -16,7 +16,7 @@ import (
 type fakeSession struct {
 	workDir string
 	pane    string
-	onEnter func(*fakeSession) // called when "Enter" is sent via sendKeysRaw
+	onEnter func(*fakeSession) // called when "ENTER" is sent via sendKeysRaw
 }
 
 type FakeTmuxClient struct {
@@ -68,7 +68,7 @@ func (f *FakeTmuxClient) sendKeysRaw(session string, keys ...string) error {
 		return fmt.Errorf("no such session: %s", session)
 	}
 	for _, k := range keys {
-		if k == "Enter" {
+		if k == "ENTER" {
 			if s.onEnter != nil {
 				s.onEnter(s)
 			}
@@ -393,7 +393,7 @@ func TestSendKeysRaw(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if err := sendKeysRaw(name, "echo RAW_TEST_OUTPUT", "Enter"); err != nil {
+	if err := sendKeysRaw(name, "echo RAW_TEST_OUTPUT", "ENTER"); err != nil {
 		t.Fatalf("sendKeysRaw: %v", err)
 	}
 
@@ -647,7 +647,7 @@ case "$1" in
     [ -f "$DIR/sess-$NAME" ] || { echo "can't find session: $NAME" >&2; exit 1; }
     shift 3
     for arg in "$@"; do
-      if [ "$arg" != "Enter" ]; then
+      if [ "$arg" != "ENTER" ]; then
         printf '%s' "$arg" >> "$DIR/pane-$NAME"
       fi
     done
@@ -746,7 +746,7 @@ func TestRealTmuxSendAndCapture(t *testing.T) { // integration test
 	}
 
 	// sendKeysRaw
-	if err := sendKeysRaw(name, "echo RAW_INTEGRATION", "Enter"); err != nil {
+	if err := sendKeysRaw(name, "echo RAW_INTEGRATION", "ENTER"); err != nil {
 		t.Fatalf("sendKeysRaw: %v", err)
 	}
 

@@ -235,11 +235,11 @@ func (r *RealTmuxClient) sendKeys(session, keys string) error {
 	// Delay before Enter to let the TUI process pasted content
 	time.Sleep(200 * time.Millisecond)
 	// Double Enter — second is a no-op safety net for TUIs that sometimes miss the first
-	if err := r.sendKeysRaw(session, "Enter"); err != nil {
+	if err := r.sendKeysRaw(session, "ENTER"); err != nil {
 		return err
 	}
 	time.Sleep(100 * time.Millisecond)
-	return r.sendKeysRaw(session, "Enter")
+	return r.sendKeysRaw(session, "ENTER")
 }
 
 func (r *RealTmuxClient) sendKeysRaw(session string, keys ...string) error {
@@ -285,11 +285,11 @@ func (r *RealTmuxClient) sendPrompt(session, prompt string) error {
 
 	// Send Enter twice — first submits the prompt, second is a no-op safety net
 	// (hitting Enter on an empty prompt field does nothing in Codex/Claude)
-	if err := r.sendKeysRaw(session, "Enter"); err != nil {
+	if err := r.sendKeysRaw(session, "ENTER"); err != nil {
 		return err
 	}
 	time.Sleep(100 * time.Millisecond)
-	return r.sendKeysRaw(session, "Enter")
+	return r.sendKeysRaw(session, "ENTER")
 }
 
 func (r *RealTmuxClient) capturePane(session string) (string, error) {
@@ -367,9 +367,9 @@ func waitForReady(session, runtime string, profile runtimeSpec, timeout time.Dur
 			return nil
 		}
 		if state == readyNeedTrust && !trustDismissed {
-			_ = sendKeysRaw(session, "Enter")
+			_ = sendKeysRaw(session, "ENTER")
 			time.Sleep(100 * time.Millisecond)
-			_ = sendKeysRaw(session, "Enter")
+			_ = sendKeysRaw(session, "ENTER")
 			trustDismissed = true
 			time.Sleep(readySleepAfterTrust)
 			continue
@@ -473,7 +473,7 @@ func SendFollowUp(session, message string) error {
 		return fmt.Errorf("send follow-up text: %w", err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if err := backend.sendKeysRaw(session, "Enter"); err != nil {
+	if err := backend.sendKeysRaw(session, "ENTER"); err != nil {
 		return fmt.Errorf("send follow-up enter: %w", err)
 	}
 	return nil
