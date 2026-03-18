@@ -5,7 +5,7 @@ work
 # Polis-owned (city data, layered on when installed — never tracked upstream)
 .beads/
 .bv/
-memory/
+/memory/
 transcripts/
 traces/
 polis.yaml
