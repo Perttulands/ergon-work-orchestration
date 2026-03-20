@@ -16,7 +16,7 @@ func newSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "send <session> <prompt>",
 		Short: "Send a prompt to a running tmux worker session",
-		Long:  `Injects a prompt into a running tmux worker session via load-buffer/paste-buffer.`,
+		Long:  `Injects a prompt into a running tmux worker session via worker.SendPrompt() using tmux load-buffer/paste-buffer.`,
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			session := args[0]
@@ -68,4 +68,3 @@ func loadSendPrompt(promptArgs []string, filePath string) (string, error) {
 	}
 	return strings.Join(promptArgs, " "), nil
 }
-

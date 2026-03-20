@@ -87,7 +87,7 @@ mv work ~/.local/bin/
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `WORK_SPINE_DUAL_WRITE` | unset | When `1` or `true`, `work run` shadow-writes spine events alongside the legacy trace JSONL/index |
+| `WORK_SPINE_DUAL_WRITE` | enabled when unset | Enabled by default; set to `0` or `false` to disable spine writes. When enabled, `work run` shadow-writes spine events alongside the legacy trace JSONL/index |
 | `POLIS_SPINE_DIR` | `~/.polis/spine/events` | Override the spine event directory for dual-write and parity checks |
 
 Legacy `work history` and `work trace` remain the operator-facing views during the D15 parity period. Spine output is additive until parity is proven.

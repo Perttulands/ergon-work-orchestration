@@ -1,3 +1,5 @@
+github.com/Perttulands/polis-utils v0.0.0-20260318093930-a81adb4e5523 h1:FASzaCdWw3+9iqqHWh/qC2eGE/w84WePeGyBtLZOVJ8=
+github.com/Perttulands/polis-utils v0.0.0-20260318093930-a81adb4e5523/go.mod h1:dxShCbDtaFyh63YHGCDys/8YPcvaX6LW24BGMEJQ7Bo=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=

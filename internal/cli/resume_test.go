@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"polis/work/internal/ecosystem"
 	"polis/work/internal/index"
 	"polis/work/internal/runstate"
 	"polis/work/internal/testutil"
@@ -22,6 +23,42 @@ func TestResumeCommandExists(t *testing.T) {
 		}
 	}
 	t.Fatal("resume command should be registered")
+}
+
+func TestResumeCommandDoesNotPolluteAmbientBeadsDir(t *testing.T) {
+	if !ecosystem.Available("br") {
+		t.Skip("br not available")
+	}
+
+	ambientBeadsDir := t.TempDir()
+	t.Setenv("BEADS_DIR", ambientBeadsDir)
+	t.Setenv("POLIS_ACTOR", "resume-test")
+	before := countBeadEvents(t, ambientBeadsDir)
+
+	_, workDir := configureWorkHome(t)
+	store, err := runstate.Create(workDir, runstate.Config{
+		BeadID:      "pol-resume-isolation",
+		BeadManaged: true,
+		Task:        "resume isolation regression leak test",
+		Citizen:     "zeus",
+		Repo:        t.TempDir(),
+		Runtime:     "codex",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.Checkpoint("context_gather", runstate.PhaseContextReady, "cp-isolation", "context ready"); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	root := NewRoot("test")
+	root.SetArgs([]string{"resume", "pol-resume-isolation"})
+	_ = root.Execute()
+
+	after := countBeadEvents(t, ambientBeadsDir)
+	if after != before {
+		t.Fatalf("resume test polluted ambient BEADS_DIR: before=%d after=%d dir=%s", before, after, ambientBeadsDir)
+	}
 }
 
 func TestResumeCommandHandlesPreWorkerCrash(t *testing.T) {
@@ -359,6 +396,7 @@ type resumeSeedOptions struct {
 
 func configureWorkHome(t *testing.T) (string, string) {
 	t.Helper()
+	testutil.TestBeadsDir(t)
 	homeDir := t.TempDir()
 	workDir := filepath.Join(homeDir, ".work")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -366,6 +404,24 @@ func configureWorkHome(t *testing.T) (string, string) {
 	}
 	t.Setenv("HOME", homeDir)
 	return homeDir, workDir
+}
+
+func countBeadEvents(t *testing.T, beadsDir string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(beadsDir, "events.jsonl"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("read events.jsonl: %v", err)
+	}
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func configureLearningLoop(t *testing.T) string {
