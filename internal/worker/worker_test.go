@@ -136,12 +136,16 @@ func useFake(t *testing.T) *FakeTmuxClient {
 	origCompletionPoll := completionPollInterval
 	origTrustSleep := readySleepAfterTrust
 	origEnvDelay := spawnEnvSetupDelay
+	origEnterDelay := enterDelay
+	origReadyTimeout := readyTimeout
 
 	backend = fake
 	readyPollInterval = 1 * time.Millisecond
 	completionPollInterval = 1 * time.Millisecond
 	readySleepAfterTrust = 0
 	spawnEnvSetupDelay = 0
+	enterDelay = 0
+	readyTimeout = 100 * time.Millisecond
 
 	t.Cleanup(func() {
 		backend = origBackend
@@ -149,6 +153,8 @@ func useFake(t *testing.T) *FakeTmuxClient {
 		completionPollInterval = origCompletionPoll
 		readySleepAfterTrust = origTrustSleep
 		spawnEnvSetupDelay = origEnvDelay
+		enterDelay = origEnterDelay
+		readyTimeout = origReadyTimeout
 	})
 
 	return fake
@@ -490,6 +496,10 @@ func TestWaitForReadyTimeout(t *testing.T) {
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("expected timeout error, got: %v", err)
 	}
+	// Error should include last pane content for diagnostics
+	if !strings.Contains(err.Error(), "last pane") {
+		t.Errorf("expected diagnostic pane content in error, got: %v", err)
+	}
 }
 
 func TestWaitForReadyTrustDismissal(t *testing.T) {
@@ -646,6 +656,8 @@ case "$1" in
     NAME="$3"
     [ -f "$DIR/sess-$NAME" ] || { echo "can't find session: $NAME" >&2; exit 1; }
     shift 3
+    # Strip -l flag (literal mode) — sandbox doesn't need to distinguish
+    if [ "$1" = "-l" ]; then shift; fi
     for arg in "$@"; do
       if [ "$arg" != "ENTER" ]; then
         printf '%s' "$arg" >> "$DIR/pane-$NAME"
@@ -871,6 +883,12 @@ func TestSendFollowUpOK(t *testing.T) {
 	pane, _ := fake.capturePane("test-session")
 	if !strings.Contains(pane, "Please add unit tests") {
 		t.Errorf("pane should contain follow-up message, got: %q", pane)
+	}
+	// Verify double ENTER was sent (two newlines after the message text)
+	// The pane should contain the -l flag text, then two ENTER newlines
+	enterCount := strings.Count(pane[strings.Index(pane, "Please add unit tests"):], "\n")
+	if enterCount < 2 {
+		t.Errorf("expected at least 2 ENTERs after message, got %d newlines; pane: %q", enterCount, pane)
 	}
 }
 
