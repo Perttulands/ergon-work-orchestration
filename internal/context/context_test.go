@@ -120,6 +120,26 @@ func TestGatherNoContext(t *testing.T) {
 	}
 }
 
+func TestGatherBeadsRootFromEnv(t *testing.T) {
+	testutil.SandboxPATH(t, nil)
+
+	envRoot := t.TempDir()
+	t.Setenv("WORK_BEADS_ROOT", envRoot)
+
+	cfg := Config{
+		WorkDir: t.TempDir(),
+		// BeadsRoot deliberately empty — should pick up WORK_BEADS_ROOT
+	}
+	result, err := Gather(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should not fail — beadsRoot resolved from env
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+}
+
 // --- bv integration tests ---
 
 func TestFormatBvSearch(t *testing.T) {
