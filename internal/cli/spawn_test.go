@@ -33,8 +33,9 @@ case "$1" in
 esac
 `
 	testutil.SandboxPATH(t, map[string]string{
-		"tmux":  tmuxScript,
-		"relay": `exit 0`,
+		"tmux":        tmuxScript,
+		"relay":       `exit 0`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 	t.Setenv("HOME", t.TempDir())
 
@@ -75,8 +76,9 @@ case "$1" in
 esac
 `
 	testutil.SandboxPATH(t, map[string]string{
-		"tmux":  tmuxScript,
-		"relay": `exit 1`,
+		"tmux":        tmuxScript,
+		"relay":       `exit 1`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 	t.Setenv("WORK_STRICT", "0")
 	t.Setenv("HOME", t.TempDir())
@@ -106,8 +108,9 @@ case "$1" in
 esac
 `
 	testutil.SandboxPATH(t, map[string]string{
-		"tmux":  tmuxScript,
-		"relay": `exit 1`,
+		"tmux":        tmuxScript,
+		"relay":       `exit 1`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 	t.Setenv("HOME", t.TempDir())
 

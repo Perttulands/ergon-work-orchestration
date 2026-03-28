@@ -243,7 +243,7 @@ func (r *RealTmuxClient) requireTmux() error {
 }
 
 func (r *RealTmuxClient) createSession(name, workDir string) error {
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", workDir)
+	cmd := exec.Command("systemd-run", "--user", "--scope", "tmux", "new-session", "-d", "-s", name, "-c", workDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}

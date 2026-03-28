@@ -152,7 +152,7 @@ work spawn <citizen> [flags]
 
 ### `work send <session> <prompt>`
 
-Inject a prompt into a running tmux worker session via `tmux send-keys`.
+Inject a prompt into a running tmux worker session via `tmux load-buffer`/`paste-buffer`.
 
 ```
 work send <session> <prompt> [flags]
@@ -356,6 +356,7 @@ Both `work run` and `work spawn` resolve runtime from this profile chain. `--run
 |----------|-------------|
 | `WORK_STRICT` | Override strict mode: `1`/`true`/`yes`/`on` enables, `0`/`false`/`no`/`off` relaxes |
 | `WORK_RUNTIME_CONFIG` | Path to runtime profile JSON file (highest priority) |
+| `WORK_ENTER_DELAY_MS` | Delay in ms before sending ENTER after pasting content into tmux (default: `200`) |
 | `LEARNING_LOOP_DIR` | Base directory for learning-loop scripts; falls back to `~/tools/learning-loop` |
 | `HOME` | Used for all `~/.work` paths and fallback runtime config location |
 

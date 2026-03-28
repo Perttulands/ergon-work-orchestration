@@ -198,6 +198,7 @@ esac
 		"br":   `echo "test-bead-001"`,
 		"gate": `echo '{"pass":true,"score":0.95}'`,
 		"git":  `echo "abc1234 initial commit"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 
 	// Set up work directory
@@ -264,6 +265,7 @@ esac
 	testutil.SandboxPATH(t, map[string]string{
 		"tmux": tmuxScript,
 		"git":  `echo "abc1234 commit"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 
 	// Set up isolated HOME with .work directory
@@ -350,6 +352,7 @@ esac
 		"br":   `echo "gate-fail-bead"`,
 		"gate": `printf '{"pass":false,"score":0.25}'; exit 1`,
 		"git":  `echo "abc1234 commit"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 
 	homeDir := t.TempDir()
@@ -404,6 +407,7 @@ esac
 	testutil.SandboxPATH(t, map[string]string{
 		"tmux": tmuxScript,
 		"git":  `echo "deadbeef commit msg"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 	t.Setenv("WORK_STRICT", "0") // bead-free mode requires relaxed: br commands are absent by design
 
@@ -447,6 +451,7 @@ esac
 func TestRunTaskRejectsShortTitle(t *testing.T) {
 	testutil.SandboxPATH(t, map[string]string{
 		"git": `echo "abc1234 commit"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 
 	homeDir := t.TempDir()
@@ -492,6 +497,7 @@ esac
 		"br":   `echo "lint-pass-bead"`,
 		"gate": `echo '{"pass":true,"score":0.9}'`,
 		"git":  `echo "abc1234 commit"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 
 	homeDir := t.TempDir()
@@ -526,6 +532,7 @@ esac
 	testutil.SandboxPATH(t, map[string]string{
 		"br":  brScript,
 		"git": `echo "abc1234 commit"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 
 	homeDir := t.TempDir()
@@ -578,6 +585,7 @@ esac
 		"tmux": tmuxScript,
 		"gate": `echo '{"pass":true,"score":0.9}'`,
 		"git":  `echo "abc1234 commit"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 
 	homeDir := t.TempDir()
@@ -626,6 +634,7 @@ esac
 		"tmux": tmuxScript,
 		"gate": `echo '{"pass":true,"score":0.9}'`,
 		"git":  `echo "abc1234 commit"`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 
 	homeDir := t.TempDir()
