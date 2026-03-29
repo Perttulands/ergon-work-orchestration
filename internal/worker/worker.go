@@ -243,7 +243,7 @@ func (r *RealTmuxClient) requireTmux() error {
 }
 
 func (r *RealTmuxClient) createSession(name, workDir string) error {
-	cmd := exec.Command("systemd-run", "--user", "--scope", "tmux", "new-session", "-d", "-s", name, "-c", workDir)
+	cmd := exec.Command("systemd-run", "--user", "--scope", "tmux", "-L", "polis", "new-session", "-d", "-s", name, "-c", workDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
@@ -251,7 +251,7 @@ func (r *RealTmuxClient) createSession(name, workDir string) error {
 }
 
 func (r *RealTmuxClient) sendKeys(session, keys string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", session, "-l", keys)
+	cmd := exec.Command("tmux", "-L", "polis", "send-keys", "-t", session, "-l", keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
@@ -267,7 +267,7 @@ func (r *RealTmuxClient) sendKeys(session, keys string) error {
 
 func (r *RealTmuxClient) sendKeysRaw(session string, keys ...string) error {
 	args := append([]string{"send-keys", "-t", session}, keys...)
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.Command("tmux", append([]string{"-L", "polis"}, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
@@ -292,13 +292,13 @@ func (r *RealTmuxClient) sendPrompt(session, prompt string) error {
 	f.Close()
 
 	// Load into tmux buffer
-	loadCmd := exec.Command("tmux", "load-buffer", tmpPath)
+	loadCmd := exec.Command("tmux", "-L", "polis", "load-buffer", tmpPath)
 	if out, err := loadCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("load-buffer: %s: %s", err, out)
 	}
 
 	// Paste into the target pane
-	pasteCmd := exec.Command("tmux", "paste-buffer", "-t", session)
+	pasteCmd := exec.Command("tmux", "-L", "polis", "paste-buffer", "-t", session)
 	if out, err := pasteCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("paste-buffer: %s: %s", err, out)
 	}
@@ -316,7 +316,7 @@ func (r *RealTmuxClient) sendPrompt(session, prompt string) error {
 }
 
 func (r *RealTmuxClient) capturePane(session string) (string, error) {
-	cmd := exec.Command("tmux", "capture-pane", "-t", session, "-p")
+	cmd := exec.Command("tmux", "-L", "polis", "capture-pane", "-t", session, "-p")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("capture pane %s: %w", session, err)
@@ -325,7 +325,7 @@ func (r *RealTmuxClient) capturePane(session string) (string, error) {
 }
 
 func (r *RealTmuxClient) killSession(name string) error {
-	cmd := exec.Command("tmux", "kill-session", "-t", name)
+	cmd := exec.Command("tmux", "-L", "polis", "kill-session", "-t", name)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("kill session %s: %w", name, err)
 	}
@@ -333,7 +333,7 @@ func (r *RealTmuxClient) killSession(name string) error {
 }
 
 func (r *RealTmuxClient) sessionExists(name string) bool {
-	cmd := exec.Command("tmux", "has-session", "-t", name)
+	cmd := exec.Command("tmux", "-L", "polis", "has-session", "-t", name)
 	return cmd.Run() == nil
 }
 

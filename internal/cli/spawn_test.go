@@ -24,6 +24,8 @@ func TestSpawnCommandExists(t *testing.T) {
 
 func TestSpawnCommandSuccess(t *testing.T) {
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session)  exit 1 ;;
   new-session)  exit 0 ;;
@@ -67,6 +69,8 @@ func TestSpawnCommandInvalidRuntime(t *testing.T) {
 
 func TestSpawnCommandRelayFailureWarnsInRelaxedMode(t *testing.T) {
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session)  exit 1 ;;
   new-session)  exit 0 ;;
@@ -99,6 +103,8 @@ esac
 
 func TestSpawnCommandRelayFailureFailsInStrictMode(t *testing.T) {
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session)  exit 1 ;;
   new-session)  exit 0 ;;

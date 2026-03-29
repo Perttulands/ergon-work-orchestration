@@ -182,6 +182,8 @@ func TestRunTaskOrchestration(t *testing.T) {
 	// - kill-session: succeed
 	// - load-buffer / paste-buffer: succeed
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)  exit 0 ;;
   send-keys)    exit 0 ;;
@@ -251,6 +253,8 @@ esac
 func TestRunTaskTraceRecordedOnSpawnError(t *testing.T) {
 	// Mock tmux that fails at create-session (simulates tmux down)
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)  echo "server not found" >&2; exit 1 ;;
   send-keys)    exit 1 ;;
@@ -336,6 +340,8 @@ esac
 // the pattern database.
 func TestRunTaskGateFailOutcome(t *testing.T) {
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)  exit 0 ;;
   send-keys)    exit 0 ;;
@@ -393,6 +399,8 @@ func TestRunTaskBeadFreeMode(t *testing.T) {
 	// Test orchestration when br is not on PATH (bead-free mode).
 	// tmux mock still needed for worker spawn.
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)  exit 0 ;;
   send-keys)    exit 0 ;;
@@ -481,6 +489,8 @@ func TestRunTaskAcceptsLongTitle(t *testing.T) {
 	// Verify that a well-formed title passes lint
 	// (test exits at worker spawn, not at lint)
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)  exit 0 ;;
   send-keys)    exit 0 ;;
@@ -523,6 +533,8 @@ esac
 func TestRunTaskRejectsBeadWithMissingFields(t *testing.T) {
 	// Mock br show returning a bead with missing fields
 	brScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   show) echo '[{"id":"pol-bad1","title":"fix it","description":"short","issue_type":"story","priority":0}]' ;;
   create) echo "pol-bad1" ;;
@@ -561,6 +573,8 @@ esac
 
 func TestRunTaskPassesBeadWithGoodFields(t *testing.T) {
 	brScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   show) echo '[{"id":"pol-good","title":"enforce minimum bead quality before dispatch","description":"A detailed description of what needs to happen with enough context.","issue_type":"feature","priority":2}]' ;;
   create) echo "pol-good" ;;
@@ -569,6 +583,8 @@ case "$1" in
 esac
 `
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)  exit 0 ;;
   send-keys)    exit 0 ;;
@@ -610,6 +626,8 @@ esac
 
 func TestRunTaskPassesNonPolBeadWithGoodFields(t *testing.T) {
 	brScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   show) echo '[{"id":"relay-good","title":"enforce minimum bead quality before dispatch","description":"A detailed description of what needs to happen with enough context.","issue_type":"feature","priority":2}]' ;;
   create) echo "relay-good" ;;
@@ -618,6 +636,8 @@ case "$1" in
 esac
 `
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)  exit 0 ;;
   send-keys)    exit 0 ;;

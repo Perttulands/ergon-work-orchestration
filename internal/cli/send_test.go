@@ -22,6 +22,8 @@ exit 0
 
 func tmuxMockSessionNotFound() string {
 	return `#!/bin/bash
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session) exit 1 ;;
   *)           exit 0 ;;
@@ -34,6 +36,8 @@ func tmuxMockRequireTMPDIR() string {
 if [ "${TMUX_TMPDIR}" != "${EXPECT_TMUX_TMPDIR}" ]; then
   exit 7
 fi
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session) exit 0 ;;
   send-keys)   exit 0 ;;
@@ -47,6 +51,8 @@ func tmuxMockRecordPromptInjection() string {
 set -eu
 log="${TMUX_LOG}"
 printf '%s\n' "$*" >> "$log"
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session)
     exit 0

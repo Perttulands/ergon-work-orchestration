@@ -641,6 +641,8 @@ func TestWaitForCompletionMaxWait(t *testing.T) {
 const FakeTmuxClientScript = `
 DIR="$FAKE_TMUX_DIR"
 mkdir -p "$DIR"
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)
     NAME="$4"
