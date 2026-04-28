@@ -99,6 +99,8 @@ func TestBrCreateWhenBrAvailable(t *testing.T) {
 	if !Available("br") {
 		t.Skip("br not available")
 	}
+	testutil.TestBeadsDir(t)
+	t.Setenv("POLIS_ACTOR", "ecosystem-test")
 	// br create requires a valid .beads directory; just verify it doesn't panic
 	_, err := BrCreate("degradation test probe", "/tmp")
 	// Error is expected (no .beads dir in /tmp), but it shouldn't be nil-pointer or panic

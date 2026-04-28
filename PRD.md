@@ -98,6 +98,41 @@ Optional: `relay` -- publishes run events to other agents.
 - Long-term pattern analysis (that's learning-loop)
 - Display a UI (that's Agora when it exists)
 
+## Tmux ENTER Delivery (pol-d401)
+
+Prompt injection into tmux worker sessions relies on sending the ENTER key after
+content is pasted. This is fragile — tmux `send-keys ENTER` can silently fail if
+the TUI hasn't finished processing the paste, or if the key is sent with the wrong
+casing. Every send path must follow the same hardened pattern:
+
+### Requirements
+
+1. **Double-ENTER on all send paths.** First ENTER submits; second is a no-op safety net.
+   Applies to: `sendKeys`, `sendPrompt`, `SendFollowUp`, `waitForReady` trust dismiss.
+2. **Literal text flag (`-l`) for user-supplied content.** `send-keys` without `-l`
+   interprets key names (e.g. "Enter", "Space"). Text from prompts and follow-up
+   messages must use `-l` or the load-buffer/paste-buffer path.
+3. **Post-paste delay before ENTER.** Currently hardcoded at 200ms. Must be sufficient
+   for the TUI to register pasted content before ENTER arrives. Consider making
+   configurable via `WORK_ENTER_DELAY_MS` env var (default 200).
+4. **ENTER delivery verification (stretch).** After sending ENTER, optionally capture
+   the pane and confirm the prompt text is no longer in the input area. Retry once
+   if verification fails. Guards against dropped keystrokes under system load.
+
+### Affected Code Paths
+
+| Path | Current | Required |
+|------|---------|----------|
+| `sendKeys()` | text + 2×ENTER | text via `-l` + 2×ENTER |
+| `sendPrompt()` | load-buffer + paste-buffer + 2×ENTER | ✓ (correct) |
+| `SendFollowUp()` | `-l` text + **1×ENTER** | `-l` text + **2×ENTER** |
+| `waitForReady()` trust | 2×ENTER | ✓ (correct) |
+
+### Non-Goals
+
+- Replacing tmux with a different IPC mechanism
+- Adding retry loops that mask deeper failures
+
 ## Success
 
 - `work run "task"` completes a full lifecycle without human intervention
@@ -105,3 +140,4 @@ Optional: `relay` -- publishes run events to other agents.
 - After 20 runs, measurably better outcomes than run 1
 - Another agent can read a trace and understand what happened
 - Works standalone (no gate, no br) with graceful degradation
+- Every tmux send path delivers ENTER reliably — no silent failures

@@ -3,8 +3,11 @@ package worker
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,7 +19,7 @@ import (
 type fakeSession struct {
 	workDir string
 	pane    string
-	onEnter func(*fakeSession) // called when "Enter" is sent via sendKeysRaw
+	onEnter func(*fakeSession) // called when "ENTER" is sent via sendKeysRaw
 }
 
 type FakeTmuxClient struct {
@@ -68,7 +71,7 @@ func (f *FakeTmuxClient) sendKeysRaw(session string, keys ...string) error {
 		return fmt.Errorf("no such session: %s", session)
 	}
 	for _, k := range keys {
-		if k == "Enter" {
+		if k == "ENTER" {
 			if s.onEnter != nil {
 				s.onEnter(s)
 			}
@@ -136,12 +139,16 @@ func useFake(t *testing.T) *FakeTmuxClient {
 	origCompletionPoll := completionPollInterval
 	origTrustSleep := readySleepAfterTrust
 	origEnvDelay := spawnEnvSetupDelay
+	origEnterDelay := enterDelay
+	origReadyTimeout := readyTimeout
 
 	backend = fake
 	readyPollInterval = 1 * time.Millisecond
 	completionPollInterval = 1 * time.Millisecond
 	readySleepAfterTrust = 0
 	spawnEnvSetupDelay = 0
+	enterDelay = 0
+	readyTimeout = 100 * time.Millisecond
 
 	t.Cleanup(func() {
 		backend = origBackend
@@ -149,6 +156,8 @@ func useFake(t *testing.T) *FakeTmuxClient {
 		completionPollInterval = origCompletionPoll
 		readySleepAfterTrust = origTrustSleep
 		spawnEnvSetupDelay = origEnvDelay
+		enterDelay = origEnterDelay
+		readyTimeout = origReadyTimeout
 	})
 
 	return fake
@@ -393,7 +402,7 @@ func TestSendKeysRaw(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if err := sendKeysRaw(name, "echo RAW_TEST_OUTPUT", "Enter"); err != nil {
+	if err := sendKeysRaw(name, "echo RAW_TEST_OUTPUT", "ENTER"); err != nil {
 		t.Fatalf("sendKeysRaw: %v", err)
 	}
 
@@ -489,6 +498,10 @@ func TestWaitForReadyTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("expected timeout error, got: %v", err)
+	}
+	// Error should include last pane content for diagnostics
+	if !strings.Contains(err.Error(), "last pane") {
+		t.Errorf("expected diagnostic pane content in error, got: %v", err)
 	}
 }
 
@@ -628,6 +641,8 @@ func TestWaitForCompletionMaxWait(t *testing.T) {
 const FakeTmuxClientScript = `
 DIR="$FAKE_TMUX_DIR"
 mkdir -p "$DIR"
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   new-session)
     NAME="$4"
@@ -646,8 +661,10 @@ case "$1" in
     NAME="$3"
     [ -f "$DIR/sess-$NAME" ] || { echo "can't find session: $NAME" >&2; exit 1; }
     shift 3
+    # Strip -l flag (literal mode) — sandbox doesn't need to distinguish
+    if [ "$1" = "-l" ]; then shift; fi
     for arg in "$@"; do
-      if [ "$arg" != "Enter" ]; then
+      if [ "$arg" != "ENTER" ]; then
         printf '%s' "$arg" >> "$DIR/pane-$NAME"
       fi
     done
@@ -680,7 +697,13 @@ func useRealWithSandboxTmux(t *testing.T) {
 	t.Helper()
 	stateDir := t.TempDir()
 	t.Setenv("FAKE_TMUX_DIR", stateDir)
-	testutil.SandboxPATH(t, map[string]string{"tmux": FakeTmuxClientScript})
+	testutil.SandboxPATH(t, map[string]string{
+		"systemd-run": `
+shift 2
+exec "$@"
+`,
+		"tmux": FakeTmuxClientScript,
+	})
 
 	origBackend := backend
 	backend = &RealTmuxClient{}
@@ -746,7 +769,7 @@ func TestRealTmuxSendAndCapture(t *testing.T) { // integration test
 	}
 
 	// sendKeysRaw
-	if err := sendKeysRaw(name, "echo RAW_INTEGRATION", "Enter"); err != nil {
+	if err := sendKeysRaw(name, "echo RAW_INTEGRATION", "ENTER"); err != nil {
 		t.Fatalf("sendKeysRaw: %v", err)
 	}
 
@@ -771,6 +794,128 @@ func TestRealTmuxSendAndCapture(t *testing.T) { // integration test
 	// sendKeysRaw on non-existent session
 	if err := sendKeysRaw("no-such-session", "test"); err == nil {
 		t.Error("sendKeysRaw on non-existent should fail")
+	}
+}
+
+func TestRealTmuxCreateSessionUsesSystemdRunScope(t *testing.T) {
+	useRealWithSandboxTmux(t)
+	logPath := filepath.Join(t.TempDir(), "systemd-run.log")
+
+	testutil.SandboxPATH(t, map[string]string{
+		"systemd-run": fmt.Sprintf(`
+printf '%%s\n' "$@" > %q
+shift 2
+exec "$@"
+`, logPath),
+		"tmux": FakeTmuxClientScript,
+	})
+
+	origBackend := backend
+	backend = &RealTmuxClient{}
+	t.Cleanup(func() { backend = origBackend })
+	t.Setenv("FAKE_TMUX_DIR", t.TempDir())
+
+	name := t.Name()
+	if err := createSession(name, "/tmp"); err != nil {
+		t.Fatalf("createSession: %v", err)
+	}
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read systemd-run log: %v", err)
+	}
+	want := []string{"--user", "--scope", "tmux", "new-session", "-d", "-s", name, "-c", "/tmp"}
+	for _, part := range want {
+		if !strings.Contains(string(got), part) {
+			t.Fatalf("systemd-run log missing %q:\n%s", part, string(got))
+		}
+	}
+}
+
+func TestCreateSessionSurvivesGatewayProcessGroupKill(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test: skipped in short mode")
+	}
+
+	setsidPath, err := exec.LookPath("setsid")
+	if err != nil {
+		t.Skip("setsid not available")
+	}
+
+	binDir := testutil.SandboxPATH(t, map[string]string{
+		"systemd-run": fmt.Sprintf(`
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --user|--scope) shift ;;
+    *) break ;;
+  esac
+done
+exec %q "$@"
+`, setsidPath),
+		"tmux": `
+DIR="$FAKE_TMUX_DIR"
+mkdir -p "$DIR"
+case "$1" in
+  new-session)
+    NAME="$4"
+    printf 'alive\n' > "$DIR/sess-$NAME"
+    /bin/sh -c 'trap "exit 0" TERM INT HUP; while :; do /bin/sleep 1; done' >/dev/null 2>&1 &
+    echo $! > "$DIR/daemon-$NAME"
+    ;;
+  has-session)
+    NAME="$3"
+    PIDFILE="$DIR/daemon-$NAME"
+    [ -f "$PIDFILE" ] || exit 1
+    PID=$(cat "$PIDFILE")
+    kill -0 "$PID" 2>/dev/null
+    ;;
+  kill-session)
+    NAME="$3"
+    PIDFILE="$DIR/daemon-$NAME"
+    [ -f "$PIDFILE" ] || exit 0
+    PID=$(cat "$PIDFILE")
+    kill "$PID" 2>/dev/null || true
+    rm -f "$PIDFILE" "$DIR/sess-$NAME"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+	})
+	t.Setenv("FAKE_TMUX_DIR", t.TempDir())
+
+	gateway := exec.Command("bash", "-lc", fmt.Sprintf("PATH=%q:$PATH; exec sleep 30", binDir))
+	gateway.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := gateway.Start(); err != nil {
+		t.Fatalf("start gateway shell: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-gateway.Process.Pid, syscall.SIGKILL)
+		_, _ = gateway.Process.Wait()
+	})
+
+	origBackend := backend
+	backend = &RealTmuxClient{}
+	t.Cleanup(func() { backend = origBackend })
+
+	session := "survives-kill"
+	if err := createSession(session, "/tmp"); err != nil {
+		t.Fatalf("createSession: %v", err)
+	}
+
+	if err := syscall.Kill(-gateway.Process.Pid, syscall.SIGTERM); err != nil {
+		t.Fatalf("kill gateway process group: %v", err)
+	}
+	_, _ = gateway.Process.Wait()
+
+	time.Sleep(150 * time.Millisecond)
+	if !SessionExists(session) {
+		t.Fatalf("session %q did not survive gateway process group kill", session)
+	}
+
+	if err := killSession(session); err != nil {
+		t.Fatalf("killSession cleanup: %v", err)
 	}
 }
 
@@ -871,6 +1016,12 @@ func TestSendFollowUpOK(t *testing.T) {
 	pane, _ := fake.capturePane("test-session")
 	if !strings.Contains(pane, "Please add unit tests") {
 		t.Errorf("pane should contain follow-up message, got: %q", pane)
+	}
+	// Verify double ENTER was sent (two newlines after the message text)
+	// The pane should contain the -l flag text, then two ENTER newlines
+	enterCount := strings.Count(pane[strings.Index(pane, "Please add unit tests"):], "\n")
+	if enterCount < 2 {
+		t.Errorf("expected at least 2 ENTERs after message, got %d newlines; pane: %q", enterCount, pane)
 	}
 }
 

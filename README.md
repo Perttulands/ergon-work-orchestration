@@ -87,7 +87,7 @@ mv work ~/.local/bin/
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `WORK_SPINE_DUAL_WRITE` | unset | When `1` or `true`, `work run` shadow-writes spine events alongside the legacy trace JSONL/index |
+| `WORK_SPINE_DUAL_WRITE` | enabled when unset | Enabled by default; set to `0` or `false` to disable spine writes. When enabled, `work run` shadow-writes spine events alongside the legacy trace JSONL/index |
 | `POLIS_SPINE_DIR` | `~/.polis/spine/events` | Override the spine event directory for dual-write and parity checks |
 
 Legacy `work history` and `work trace` remain the operator-facing views during the D15 parity period. Spine output is additive until parity is proven.
@@ -152,7 +152,7 @@ work spawn <citizen> [flags]
 
 ### `work send <session> <prompt>`
 
-Inject a prompt into a running tmux worker session via `tmux send-keys`.
+Inject a prompt into a running tmux worker session via `tmux load-buffer`/`paste-buffer`.
 
 ```
 work send <session> <prompt> [flags]
@@ -356,6 +356,7 @@ Both `work run` and `work spawn` resolve runtime from this profile chain. `--run
 |----------|-------------|
 | `WORK_STRICT` | Override strict mode: `1`/`true`/`yes`/`on` enables, `0`/`false`/`no`/`off` relaxes |
 | `WORK_RUNTIME_CONFIG` | Path to runtime profile JSON file (highest priority) |
+| `WORK_ENTER_DELAY_MS` | Delay in ms before sending ENTER after pasting content into tmux (default: `200`) |
 | `LEARNING_LOOP_DIR` | Base directory for learning-loop scripts; falls back to `~/tools/learning-loop` |
 | `HOME` | Used for all `~/.work` paths and fallback runtime config location |
 

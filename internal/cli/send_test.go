@@ -11,10 +11,8 @@ import (
 )
 
 // These tests mock the tmux binary via SandboxPATH and exercise the send
-// command path that uses:
-// 1. tmux has-session -t <session>
-// 2. tmux send-keys -t <session> -l <prompt>
-// 3. tmux send-keys -t <session> Enter
+// command path that delegates to worker.SessionExists and worker.SendPrompt
+// (which uses tmux load-buffer + paste-buffer internally).
 
 func tmuxMockAcceptAll() string {
 	return `#!/bin/bash
@@ -24,6 +22,8 @@ exit 0
 
 func tmuxMockSessionNotFound() string {
 	return `#!/bin/bash
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session) exit 1 ;;
   *)           exit 0 ;;
@@ -36,10 +36,49 @@ func tmuxMockRequireTMPDIR() string {
 if [ "${TMUX_TMPDIR}" != "${EXPECT_TMUX_TMPDIR}" ]; then
   exit 7
 fi
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session) exit 0 ;;
   send-keys)   exit 0 ;;
   *)           exit 0 ;;
+esac
+`
+}
+
+func tmuxMockRecordPromptInjection() string {
+	return `#!/bin/bash
+set -eu
+log="${TMUX_LOG}"
+printf '%s\n' "$*" >> "$log"
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
+case "$1" in
+  has-session)
+    exit 0
+    ;;
+  load-buffer)
+    cp "$2" "${TMUX_BUFFER}"
+    exit 0
+    ;;
+  paste-buffer)
+    cat "${TMUX_BUFFER}" > "${TMUX_PASTED}"
+    exit 0
+    ;;
+  send-keys)
+    shift
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "ENTER" ]; then
+        exit 0
+      fi
+      shift
+    done
+    echo "unexpected send-keys payload" >&2
+    exit 9
+    ;;
+  *)
+    exit 0
+    ;;
 esac
 `
 }
@@ -71,6 +110,46 @@ func TestSendCommandSuccess(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Sent prompt to session agent-hugo") {
 		t.Fatalf("expected confirmation, got: %s", buf.String())
+	}
+}
+
+func TestSendCommandUsesWorkerSendPrompt(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "tmux.log")
+	bufferPath := filepath.Join(t.TempDir(), "tmux-buffer.txt")
+	pastedPath := filepath.Join(t.TempDir(), "tmux-pasted.txt")
+	t.Setenv("TMUX_LOG", logPath)
+	t.Setenv("TMUX_BUFFER", bufferPath)
+	t.Setenv("TMUX_PASTED", pastedPath)
+	testutil.SandboxPATH(t, map[string]string{"tmux": tmuxMockRecordPromptInjection()})
+
+	root := NewRoot("test")
+	root.SetArgs([]string{"send", "agent-hugo", "line one", "line two"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("send failed: %v", err)
+	}
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read tmux log: %v", err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "load-buffer ") {
+		t.Fatalf("expected load-buffer call, got log: %s", logText)
+	}
+	if !strings.Contains(logText, "paste-buffer -t agent-hugo") {
+		t.Fatalf("expected paste-buffer call, got log: %s", logText)
+	}
+	if strings.Contains(logText, "send-keys -t agent-hugo line one line two") {
+		t.Fatalf("prompt should not be delivered via send-keys, got log: %s", logText)
+	}
+
+	pastedData, err := os.ReadFile(pastedPath)
+	if err != nil {
+		t.Fatalf("read pasted prompt: %v", err)
+	}
+	if string(pastedData) != "line one line two" {
+		t.Fatalf("unexpected pasted prompt: %q", string(pastedData))
 	}
 }
 

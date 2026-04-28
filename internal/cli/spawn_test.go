@@ -24,6 +24,8 @@ func TestSpawnCommandExists(t *testing.T) {
 
 func TestSpawnCommandSuccess(t *testing.T) {
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session)  exit 1 ;;
   new-session)  exit 0 ;;
@@ -33,8 +35,9 @@ case "$1" in
 esac
 `
 	testutil.SandboxPATH(t, map[string]string{
-		"tmux":  tmuxScript,
-		"relay": `exit 0`,
+		"tmux":        tmuxScript,
+		"relay":       `exit 0`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 	t.Setenv("HOME", t.TempDir())
 
@@ -64,8 +67,10 @@ func TestSpawnCommandInvalidRuntime(t *testing.T) {
 	}
 }
 
-func TestSpawnCommandRelayFailureWarnsByDefault(t *testing.T) {
+func TestSpawnCommandRelayFailureWarnsInRelaxedMode(t *testing.T) {
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session)  exit 1 ;;
   new-session)  exit 0 ;;
@@ -75,8 +80,9 @@ case "$1" in
 esac
 `
 	testutil.SandboxPATH(t, map[string]string{
-		"tmux":  tmuxScript,
-		"relay": `exit 1`,
+		"tmux":        tmuxScript,
+		"relay":       `exit 1`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 	t.Setenv("WORK_STRICT", "0")
 	t.Setenv("HOME", t.TempDir())
@@ -87,7 +93,7 @@ esac
 	root.SetArgs([]string{"spawn", "hugo", "--repo", t.TempDir(), "--session", "agent-hugo-warn"})
 
 	if err := root.Execute(); err != nil {
-		t.Fatalf("spawn should continue in non-strict mode, got error: %v\noutput: %s", err, buf.String())
+		t.Fatalf("spawn should continue in relaxed mode, got error: %v\noutput: %s", err, buf.String())
 	}
 	out := buf.String()
 	if !strings.Contains(out, "Warning: relay register:") {
@@ -97,6 +103,8 @@ esac
 
 func TestSpawnCommandRelayFailureFailsInStrictMode(t *testing.T) {
 	tmuxScript := `
+# skip -L <server> if present
+[ "$1" = "-L" ] && shift 2
 case "$1" in
   has-session)  exit 1 ;;
   new-session)  exit 0 ;;
@@ -106,8 +114,9 @@ case "$1" in
 esac
 `
 	testutil.SandboxPATH(t, map[string]string{
-		"tmux":  tmuxScript,
-		"relay": `exit 1`,
+		"tmux":        tmuxScript,
+		"relay":       `exit 1`,
+		"systemd-run": `shift; shift; exec "$@"`,
 	})
 	t.Setenv("HOME", t.TempDir())
 

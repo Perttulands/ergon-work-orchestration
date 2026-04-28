@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +32,29 @@ var (
 	completionPollInterval = 5 * time.Second
 	readySleepAfterTrust   = 1 * time.Second
 	spawnEnvSetupDelay     = 500 * time.Millisecond
+	enterDelay             = initEnterDelay() // delay before ENTER after pasting content
+	readyTimeout           = initReadyTimeout()
 )
+
+// initEnterDelay reads WORK_ENTER_DELAY_MS from the environment (default 200).
+func initEnterDelay() time.Duration {
+	if v := os.Getenv("WORK_ENTER_DELAY_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return 200 * time.Millisecond
+}
+
+// initReadyTimeout reads WORK_READY_TIMEOUT_S from the environment (default 120).
+func initReadyTimeout() time.Duration {
+	if v := os.Getenv("WORK_READY_TIMEOUT_S"); v != "" {
+		if s, err := strconv.Atoi(v); err == nil && s > 0 {
+			return time.Duration(s) * time.Second
+		}
+	}
+	return 120 * time.Second
+}
 
 // Config holds worker spawn configuration.
 type Config struct {
@@ -175,8 +198,8 @@ func startSession(cfg Config) (*Result, string, error) {
 		return nil, "", fmt.Errorf("launch %s: %w", runtime, err)
 	}
 
-	// 4. Wait for the runtime to be ready (60s allows for trust dialog + slow startup)
-	if err := waitForReady(cfg.SessionName, runtime, runtimeProfile, 60*time.Second); err != nil {
+	// 4. Wait for the runtime to be ready (configurable via WORK_READY_TIMEOUT_S, default 120s)
+	if err := waitForReady(cfg.SessionName, runtime, runtimeProfile, readyTimeout); err != nil {
 		killSession(cfg.SessionName)
 		return nil, "", fmt.Errorf("wait for ready: %w", err)
 	}
@@ -220,7 +243,7 @@ func (r *RealTmuxClient) requireTmux() error {
 }
 
 func (r *RealTmuxClient) createSession(name, workDir string) error {
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", workDir)
+	cmd := exec.Command("systemd-run", "--user", "--scope", "tmux", "-L", "polis", "new-session", "-d", "-s", name, "-c", workDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
@@ -228,23 +251,23 @@ func (r *RealTmuxClient) createSession(name, workDir string) error {
 }
 
 func (r *RealTmuxClient) sendKeys(session, keys string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", session, keys)
+	cmd := exec.Command("tmux", "-L", "polis", "send-keys", "-t", session, "-l", keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
 	// Delay before Enter to let the TUI process pasted content
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(enterDelay)
 	// Double Enter — second is a no-op safety net for TUIs that sometimes miss the first
-	if err := r.sendKeysRaw(session, "Enter"); err != nil {
+	if err := r.sendKeysRaw(session, "ENTER"); err != nil {
 		return err
 	}
 	time.Sleep(100 * time.Millisecond)
-	return r.sendKeysRaw(session, "Enter")
+	return r.sendKeysRaw(session, "ENTER")
 }
 
 func (r *RealTmuxClient) sendKeysRaw(session string, keys ...string) error {
 	args := append([]string{"send-keys", "-t", session}, keys...)
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.Command("tmux", append([]string{"-L", "polis"}, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
@@ -269,31 +292,31 @@ func (r *RealTmuxClient) sendPrompt(session, prompt string) error {
 	f.Close()
 
 	// Load into tmux buffer
-	loadCmd := exec.Command("tmux", "load-buffer", tmpPath)
+	loadCmd := exec.Command("tmux", "-L", "polis", "load-buffer", tmpPath)
 	if out, err := loadCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("load-buffer: %s: %s", err, out)
 	}
 
 	// Paste into the target pane
-	pasteCmd := exec.Command("tmux", "paste-buffer", "-t", session)
+	pasteCmd := exec.Command("tmux", "-L", "polis", "paste-buffer", "-t", session)
 	if out, err := pasteCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("paste-buffer: %s: %s", err, out)
 	}
 
 	// Small delay to let the TUI process the pasted content before Enter
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(enterDelay)
 
 	// Send Enter twice — first submits the prompt, second is a no-op safety net
 	// (hitting Enter on an empty prompt field does nothing in Codex/Claude)
-	if err := r.sendKeysRaw(session, "Enter"); err != nil {
+	if err := r.sendKeysRaw(session, "ENTER"); err != nil {
 		return err
 	}
 	time.Sleep(100 * time.Millisecond)
-	return r.sendKeysRaw(session, "Enter")
+	return r.sendKeysRaw(session, "ENTER")
 }
 
 func (r *RealTmuxClient) capturePane(session string) (string, error) {
-	cmd := exec.Command("tmux", "capture-pane", "-t", session, "-p")
+	cmd := exec.Command("tmux", "-L", "polis", "capture-pane", "-t", session, "-p")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("capture pane %s: %w", session, err)
@@ -302,7 +325,7 @@ func (r *RealTmuxClient) capturePane(session string) (string, error) {
 }
 
 func (r *RealTmuxClient) killSession(name string) error {
-	cmd := exec.Command("tmux", "kill-session", "-t", name)
+	cmd := exec.Command("tmux", "-L", "polis", "kill-session", "-t", name)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("kill session %s: %w", name, err)
 	}
@@ -310,7 +333,7 @@ func (r *RealTmuxClient) killSession(name string) error {
 }
 
 func (r *RealTmuxClient) sessionExists(name string) bool {
-	cmd := exec.Command("tmux", "has-session", "-t", name)
+	cmd := exec.Command("tmux", "-L", "polis", "has-session", "-t", name)
 	return cmd.Run() == nil
 }
 
@@ -356,20 +379,22 @@ func detectReadyWithPatterns(output string, readyPatterns, trustPatterns []strin
 func waitForReady(session, runtime string, profile runtimeSpec, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	trustDismissed := false
+	var lastOutput string
 	for time.Now().Before(deadline) {
 		output, err := capturePane(session)
 		if err != nil {
 			return fmt.Errorf("wait for ready: %w", err)
 		}
+		lastOutput = output
 
 		state := detectReadyWithPatterns(output, profile.ReadyPatterns, profile.TrustPatterns)
 		if state == readyOK {
 			return nil
 		}
 		if state == readyNeedTrust && !trustDismissed {
-			_ = sendKeysRaw(session, "Enter")
+			_ = sendKeysRaw(session, "ENTER")
 			time.Sleep(100 * time.Millisecond)
-			_ = sendKeysRaw(session, "Enter")
+			_ = sendKeysRaw(session, "ENTER")
 			trustDismissed = true
 			time.Sleep(readySleepAfterTrust)
 			continue
@@ -377,7 +402,12 @@ func waitForReady(session, runtime string, profile runtimeSpec, timeout time.Dur
 
 		time.Sleep(readyPollInterval)
 	}
-	return fmt.Errorf("timed out waiting for %s to start (session: %s)", runtime, session)
+	// Include last pane output in error for diagnostics
+	snippet := lastOutput
+	if len(snippet) > 200 {
+		snippet = snippet[len(snippet)-200:]
+	}
+	return fmt.Errorf("timed out waiting for %s to start (session: %s, timeout: %s, last pane: %q)", runtime, session, timeout, snippet)
 }
 
 // detectCompletion checks if pane output indicates the worker is done.
@@ -472,9 +502,15 @@ func SendFollowUp(session, message string) error {
 	if err := backend.sendKeysRaw(session, "-l", message); err != nil {
 		return fmt.Errorf("send follow-up text: %w", err)
 	}
-	time.Sleep(200 * time.Millisecond)
-	if err := backend.sendKeysRaw(session, "Enter"); err != nil {
+	time.Sleep(enterDelay)
+	// Send Enter twice — first submits, second is a no-op safety net
+	// (matches the pattern in sendPrompt)
+	if err := backend.sendKeysRaw(session, "ENTER"); err != nil {
 		return fmt.Errorf("send follow-up enter: %w", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := backend.sendKeysRaw(session, "ENTER"); err != nil {
+		return fmt.Errorf("send follow-up enter2: %w", err)
 	}
 	return nil
 }

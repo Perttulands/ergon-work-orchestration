@@ -32,7 +32,7 @@ type Config struct {
 	Repo      string // repo path
 	Task      string // task description (for search)
 	WorkDir   string // ~/.work directory, defaults to ~/.work
-	BeadsRoot string // root of beads tracking (for bv), defaults to /home/polis/projects
+	BeadsRoot string // root of beads tracking (for bv), defaults to WORK_BEADS_ROOT or ~/projects
 }
 
 // Result holds the assembled context.
@@ -52,18 +52,22 @@ type Result struct {
 
 // Gather collects all available context and assembles it into injectable markdown.
 func Gather(cfg Config) (*Result, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("get home dir: %w", err)
+	}
+
 	workDir := cfg.WorkDir
 	if workDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("get home dir: %w", err)
-		}
 		workDir = filepath.Join(home, ".work")
 	}
 
 	beadsRoot := cfg.BeadsRoot
 	if beadsRoot == "" {
-		beadsRoot = "/home/polis/projects"
+		beadsRoot = os.Getenv("WORK_BEADS_ROOT")
+	}
+	if beadsRoot == "" {
+		beadsRoot = filepath.Join(home, "projects")
 	}
 
 	r := &Result{}
